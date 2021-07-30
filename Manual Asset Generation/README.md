@@ -61,10 +61,10 @@ https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/defaul
 If you already have a proxy, you'll need to manual create the proxy object and then upload it.  To do so, use this endpoint.
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__proxies_
 
-To upload to iconik standard proxy storage, you will get a "upload_url" in your response object from the proxy creation.  This is a pre-signed URL that can be used to get your actual PUT URL.  Simply POST to this url with the following header:
-`{'x-goog-resumable':'start','Content-Length':'0'}`
+To upload to iconik standard proxy storage, you will get a "upload_url" in your response object from the proxy creation.  This is a pre-signed URL that can be used to get your actual PUT URL.  Simply POST to this url with the following header:  
+`{'x-goog-resumable':'start','Content-Length':'0'}`  
 In the successful response to this POST, you will recieve your full upload URL in the response header in the `location` key.   
-Now upload your proxy file to this location with a PUT.
+Now upload your proxy file to this location with a PUT.  
 Lastly, you will need to PATCH your proxy file to `"status":"CLOSED"` for it to work properly in iconik and be visible in the UI using this endpoint.
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/patch_v1_assets__asset_id__proxies__proxy_id__
 
