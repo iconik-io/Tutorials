@@ -1,0 +1,33 @@
+{
+	"analyze_status": "N/A",
+	"archive_status": "NOT_ARCHIVED",
+	"category": null,
+	"created_by_user": "774ac51c-f6db-11e7-b11a-0a580a3c0323",
+	"custom_keyframe": null,
+	"custom_poster": null,
+	"date_created": "2021-07-30T15:16:54.406403+00:00",
+	"date_deleted": null,
+	"date_imported": "2021-07-30T15:16:54.406392+00:00",
+	"date_modified": "2021-07-30T15:16:54.406408+00:00",
+	"deleted_by_user": null,
+	"external_id": null,
+	"id": "2c5bfe1a-f149-11eb-a843-0a580a3db916",
+	"is_blocked": false,
+	"is_online": false,
+	"status": "ACTIVE",
+	"title": "My New Asset",
+	"type": "ASSET",
+	"versions": [
+	  {
+		"analyze_status": "N/A",
+		"archive_status": "NOT_ARCHIVED",
+		"created_by_user": "774ac51c-f6db-11e7-b11a-0a580a3c0323",
+		"date_created": "2021-07-30T15:16:54.408949+00:00",
+		"id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+		"is_online": false,
+		"status": "ACTIVE",
+		"transcribe_status": "N/A"
+	  }
+	],
+	"warning": null
+  }

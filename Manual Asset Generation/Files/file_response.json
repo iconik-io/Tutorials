@@ -1,0 +1,119 @@
+File 1 Response
+
+{
+  "asset_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+  "checksum": "38f7f32d194b725bd0b1855a6e35d3d3",
+  "date_created": "2021-07-28T18:10:42.366968+00:00",
+  "date_modified": "2021-07-28T18:10:42.366971+00:00",
+  "directory_path": "Test Content/MXF/AVCI_Card/CONTENTS/VIDEO",
+  "file_date_created": "2021-07-28T18:10:42.366954+00:00",
+  "file_date_modified": "2021-07-28T18:10:42.366965+00:00",
+  "file_set_id": "9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+  "format_id": "cbb91c18-efc3-11eb-b799-0a580a3d2133",
+  "id": "1f14fcd2-efcf-11eb-becb-0a580a3d6d10",
+  "name": "0002EM.MXF",
+  "original_name": "0002EM.MXF",
+  "parent_id": null,
+  "size": 264032992,
+  "status": "CLOSED",
+  "storage_id": "eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+  "type": "FILE",
+  "user_id": null,
+  "version_id": "7f8a5d68-efbc-11eb-8275-0a580a3eb0c3"
+}
+
+File 2 Response
+
+{
+	"asset_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum": "a91c921fea86c6db8306bcec7ec0f1b9",
+	"date_created": "2021-07-28T18:12:30.132629+00:00",
+	"date_modified": "2021-07-28T18:12:30.132631+00:00",
+	"directory_path": "Test Content/MXF/AVCI_Card/CONTENTS/AUDIO",
+	"file_date_created": "2021-07-28T18:12:30.132608+00:00",
+	"file_date_modified": "2021-07-28T18:12:30.132626+00:00",
+	"file_set_id": "9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id": "cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"id": "5f50b962-efcf-11eb-a3bf-0a580a3e47e4",
+	"name": "0002EM00.MXF",
+	"original_name": "0002EM00.MXF",
+	"parent_id": null,
+	"size": 1794752,
+	"status": "CLOSED",
+	"storage_id": "eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type": "FILE",
+	"user_id": null,
+	"version_id": "7f8a5d68-efbc-11eb-8275-0a580a3eb0c3"
+  }
+
+  File 3 Response
+
+  {
+	"asset_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum": "c35121db2ae5831ef73d4c7eb5931c21",
+	"date_created": "2021-07-28T18:13:46.468732+00:00",
+	"date_modified": "2021-07-28T18:13:46.468738+00:00",
+	"directory_path": "Test Content/MXF/AVCI_Card/CONTENTS/AUDIO",
+	"file_date_created": "2021-07-28T18:13:46.468705+00:00",
+	"file_date_modified": "2021-07-28T18:13:46.468726+00:00",
+	"file_set_id": "9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id": "cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"id": "8cd0b0ae-efcf-11eb-8762-0a580a3d2134",
+	"name": "0002EM01.MXF",
+	"original_name": "0002EM01.MXF",
+	"parent_id": null,
+	"size": 1794752,
+	"status": "CLOSED",
+	"storage_id": "eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type": "FILE",
+	"user_id": null,
+	"version_id": "7f8a5d68-efbc-11eb-8275-0a580a3eb0c3"
+  }
+
+  File 4 Response
+
+  {
+	"asset_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum": "0796f5e611f1549701f879ad935d00f8",
+	"date_created": "2021-07-28T18:14:54.323760+00:00",
+	"date_modified": "2021-07-28T18:14:54.323765+00:00",
+	"directory_path": "Test Content/MXF/AVCI_Card/CONTENTS/AUDIO",
+	"file_date_created": "2021-07-28T18:14:54.323732+00:00",
+	"file_date_modified": "2021-07-28T18:14:54.323754+00:00",
+	"file_set_id": "9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id": "cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"id": "b5428c38-efcf-11eb-8ee9-0a580a3d2134",
+	"name": "0002EM02.MXF",
+	"original_name": "0002EM02.MXF",
+	"parent_id": null,
+	"size": 1794752,
+	"status": "CLOSED",
+	"storage_id": "eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type": "FILE",
+	"user_id": null,
+	"version_id": "7f8a5d68-efbc-11eb-8275-0a580a3eb0c3"
+  }
+
+  File 5 Response
+
+  {
+	"asset_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum": "82fee0ba64729639b6c2fc0c60921323",
+	"date_created": "2021-07-28T18:15:34.477248+00:00",
+	"date_modified": "2021-07-28T18:15:34.477253+00:00",
+	"directory_path": "Test Content/MXF/AVCI_Card/CONTENTS/AUDIO",
+	"file_date_created": "2021-07-28T18:15:34.477231+00:00",
+	"file_date_modified": "2021-07-28T18:15:34.477244+00:00",
+	"file_set_id": "9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id": "cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"id": "cd317bba-efcf-11eb-8c88-0a580a3c9d8a",
+	"name": "0002EM02.MXF",
+	"original_name": "0002EM02.MXF",
+	"parent_id": null,
+	"size": 1794752,
+	"status": "CLOSED",
+	"storage_id": "eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type": "FILE",
+	"user_id": null,
+	"version_id": "7f8a5d68-efbc-11eb-8275-0a580a3eb0c3"
+  }

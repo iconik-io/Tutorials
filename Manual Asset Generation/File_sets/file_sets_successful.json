@@ -1,0 +1,17 @@
+{
+	"asset_id":"2c5bfe1a-f149-11eb-a843-0a580a3db916",
+	"base_dir":"Test_Content/MXF/AVCI_Card",
+	"component_ids":[
+		"cba805b8-efc3-11eb-b799-0a580a3d2133",
+		"cba80b80-efc3-11eb-b799-0a580a3d2133",
+		"cba82606-efc3-11eb-b799-0a580a3d2133",
+		"cba8298a-efc3-11eb-b799-0a580a3d2133",
+		"cba82c32-efc3-11eb-b799-0a580a3d2133",
+		"cba82ec6-efc3-11eb-b799-0a580a3d2133"
+	],
+	"format_id":"cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"name": "0002EM.MXF",
+	"status":"ACTIVE",
+	"storage_id": "eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"version_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}

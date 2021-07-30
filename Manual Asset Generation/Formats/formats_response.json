@@ -1,0 +1,183 @@
+{
+  "archive_status": null,
+  "asset_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916",
+  "components": [
+    {
+      "id": "cba805b8-efc3-11eb-b799-0a580a3d2133",
+      "metadata": {
+        "bitdepth": "10",
+        "bitrate": "97766400",
+        "bitrate_encoded": "115200000",
+        "chromasubsampling": "4:2:2",
+        "codecid": "0D01030102026202-0401020202020700",
+        "colorspace": "YUV",
+        "compression_mode": "Lossy",
+        "delay": "5837.500",
+        "delay_original": "5837.500",
+        "displayaspectratio": "1.778",
+        "duration": "18.352",
+        "format": "DV",
+        "format_commercial_ifany": "DVCPRO HD",
+        "format_settings_wrapping": "Clip",
+        "framecount": "1100",
+        "framerate": "59.940",
+        "framerate_mode": "CFR",
+        "height": "720",
+        "id": "1",
+        "pixelaspectratio": "1.333",
+        "scantype": "Progressive",
+        "standard": "NTSC",
+        "streamsize": "224276122",
+        "streamsize_encoded": "264268800",
+        "timecode_firstframe": "01:37:17:30",
+        "timecode_source": "Subcode time code",
+        "width": "960"
+      },
+      "name": "VIDEO",
+      "type": "VIDEO"
+    },
+    {
+      "id": "cba80b80-efc3-11eb-b799-0a580a3d2133",
+      "metadata": {
+        "bitdepth": "16",
+        "bitrate": "768000",
+        "bitrate_encoded": "0",
+        "bitrate_mode": "CBR",
+        "channels": "1",
+        "delay": "5837.500",
+        "delay_original": "5837.500",
+        "delay_original_source": "Stream",
+        "delay_source": "Container",
+        "duration": "18.352",
+        "format": "PCM",
+        "format_settings_endianness": "Big",
+        "format_settings_sign": "Signed",
+        "id": "1-0",
+        "muxingmode": "DV",
+        "samplingcount": "880896",
+        "samplingrate": "48000",
+        "streamsize": "1761792",
+        "streamsize_encoded": "0",
+        "streamsize_proportion": "0.00667"
+      },
+      "name": "AUDIO",
+      "type": "AUDIO"
+    },
+    {
+      "id": "cba82606-efc3-11eb-b799-0a580a3d2133",
+      "metadata": {
+        "bitdepth": "16",
+        "bitrate": "768000",
+        "bitrate_encoded": "0",
+        "bitrate_mode": "CBR",
+        "channels": "1",
+        "delay": "5837.500",
+        "delay_original": "5837.500",
+        "delay_original_source": "Stream",
+        "delay_source": "Container",
+        "duration": "18.352",
+        "format": "PCM",
+        "format_settings_endianness": "Big",
+        "format_settings_sign": "Signed",
+        "id": "1-1",
+        "muxingmode": "DV",
+        "samplingcount": "880896",
+        "samplingrate": "48000",
+        "streamsize": "1761792",
+        "streamsize_encoded": "0",
+        "streamsize_proportion": "0.00667"
+      },
+      "name": "AUDIO",
+      "type": "AUDIO"
+    },
+    {
+      "id": "cba8298a-efc3-11eb-b799-0a580a3d2133",
+      "metadata": {
+        "bitdepth": "16",
+        "bitrate": "768000",
+        "bitrate_encoded": "0",
+        "bitrate_mode": "CBR",
+        "channels": "1",
+        "delay": "5837.500",
+        "delay_original": "5837.500",
+        "delay_original_source": "Stream",
+        "delay_source": "Container",
+        "duration": "18.352",
+        "format": "PCM",
+        "format_settings_endianness": "Big",
+        "format_settings_sign": "Signed",
+        "id": "1-2",
+        "muxingmode": "DV",
+        "samplingcount": "880896",
+        "samplingrate": "48000",
+        "streamsize": "1761792",
+        "streamsize_encoded": "0",
+        "streamsize_proportion": "0.00667"
+      },
+      "name": "AUDIO",
+      "type": "AUDIO"
+    },
+    {
+      "id": "cba82c32-efc3-11eb-b799-0a580a3d2133",
+      "metadata": {
+        "bitdepth": "16",
+        "bitrate": "768000",
+        "bitrate_encoded": "0",
+        "bitrate_mode": "CBR",
+        "channels": "1",
+        "delay": "5837.500",
+        "delay_original": "5837.500",
+        "delay_original_source": "Stream",
+        "delay_source": "Container",
+        "duration": "18.352",
+        "format": "PCM",
+        "format_settings_endianness": "Big",
+        "format_settings_sign": "Signed",
+        "id": "1-3",
+        "muxingmode": "DV",
+        "samplingcount": "880896",
+        "samplingrate": "48000",
+        "streamsize": "1761792",
+        "streamsize_encoded": "0",
+        "streamsize_proportion": "0.00667"
+      },
+      "name": "AUDIO",
+      "type": "AUDIO"
+    },
+    {
+      "id": "cba82ec6-efc3-11eb-b799-0a580a3d2133",
+      "metadata": {
+        "format": "MXF TC",
+        "framerate": "30.000",
+        "id": "0-Material",
+        "timecode_firstframe": "01:37:17:15",
+        "timecode_settings": "Material Package",
+        "timecode_striped": "Yes",
+        "type": "Time code"
+      },
+      "name": "OTHER",
+      "type": "OTHER"
+    }
+  ],
+  "date_deleted": null,
+  "deleted_by_user": null,
+  "id": "cbb91c18-efc3-11eb-b799-0a580a3d2133",
+  "is_online": false,
+  "metadata": [
+    {
+      "codec": "DVCPro HD",
+      "format": "DV",
+      "frame_count": "1100",
+      "frame_rate": "59.94",
+      "internet_media_type": "video/Quicktime",
+      "overall_bit_rate": "97766400"
+    }
+  ],
+  "name": "ORIGINAL",
+  "status": "ACTIVE",
+  "storage_methods": [
+    "FILE"
+  ],
+  "user_id": null,
+  "version_id": "2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}

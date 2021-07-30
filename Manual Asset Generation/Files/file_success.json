@@ -1,0 +1,94 @@
+File 1 POST
+
+{
+	"asset_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum":"38f7f32d194b725bd0b1855a6e35d3d3",
+	"directory_path":"Test Content/MXF/AVCI_Card/CONTENTS/VIDEO/",
+	"date_created":"2007-05-16T19:21:20.000000+00:00",
+	"date_modified":"2007-05-16T19:21:20.000000+00:00",
+	"file_set_id":"9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id":"cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"name":"0002EM.MXF",
+	"original_name":"0002EM.MXF",
+	"size":"264032992",
+	"status":"CLOSED",
+	"storage_id":"eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type":"FILE",
+	"version_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}
+
+File 2 POST
+
+{
+	"asset_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum":"a91c921fea86c6db8306bcec7ec0f1b9",
+	"directory_path":"Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/",
+	"date_created":"2007-05-16T19:21:20.000000+00:00",
+	"date_modified":"2007-05-16T19:21:20.000000+00:00",
+	"file_set_id":"9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id":"cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"name":"0002EM00.MXF",
+	"original_name":"0002EM00.MXF",
+	"size":"1794752",
+	"status":"CLOSED",
+	"storage_id":"eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type":"FILE",
+	"version_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}
+
+File 3 POST
+
+{
+	"asset_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum":"c35121db2ae5831ef73d4c7eb5931c21",
+	"directory_path":"Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/",
+	"date_created":"2007-05-16T19:21:20.000000+00:00",
+	"date_modified":"2007-05-16T19:21:20.000000+00:00",
+	"file_set_id":"9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id":"cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"name":"0002EM01.MXF",
+	"original_name":"0002EM01.MXF",
+	"size":"1794752",
+	"status":"CLOSED",
+	"storage_id":"eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type":"FILE",
+	"version_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}
+
+File 4 POST
+
+{
+	"asset_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum":"0796f5e611f1549701f879ad935d00f8",
+	"directory_path":"Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/",
+	"date_created":"2007-05-16T19:21:20.000000+00:00",
+	"date_modified":"2007-05-16T19:21:20.000000+00:00",
+	"file_set_id":"9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id":"cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"name":"0002EM02.MXF",
+	"original_name":"0002EM02.MXF",
+	"size":"1794752",
+	"status":"CLOSED",
+	"storage_id":"eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type":"FILE",
+	"version_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}
+
+File 5 POST
+
+{
+	"asset_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916",
+	"checksum":"82fee0ba64729639b6c2fc0c60921323",
+	"directory_path":"Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/",
+	"date_created":"2007-05-16T19:21:20.000000+00:00",
+	"date_modified":"2007-05-16T19:21:20.000000+00:00",
+	"file_set_id":"9f444dd0-efcb-11eb-96ca-0a580a3d936d",
+	"format_id":"cbb91c18-efc3-11eb-b799-0a580a3d2133",
+	"name":"0002EM02.MXF",
+	"original_name":"0002EM02.MXF",
+	"size":"1794752",
+	"status":"CLOSED",
+	"storage_id":"eafedefa-bffa-11e8-ac61-0a580a3c0e75",
+	"type":"FILE",
+	"version_id":"2c5c5ae0-f149-11eb-a843-0a580a3db916"
+}
