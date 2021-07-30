@@ -43,32 +43,32 @@ To register this file all by hand, we'll have to manually generate a proper prox
 
 You will find example JSON for all successful calls and the responses of those calls in the associated folders in this project.
 
-Create the asset itself.  First call will be a POST to the assets endpoint.
+Create the asset itself.  First call will be a POST to the assets endpoint.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/assets/spec/#/operations/default/post_v1_assets_
 
-Next we will create a Format for this asset.  We need the Asset ID (returned in the fist call) to create this.
+Next we will create a Format for this asset.  We need the Asset ID (returned in the fist call) to create this.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__formats_
 
-Once we have a format, we need to associate a File Set.  We need both the Format ID and Asset ID to make this call.
+Once we have a format, we need to associate a File Set.  We need both the Format ID and Asset ID to make this call.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__file_sets_
 
-Last, we now need to loop through all of our Files we want to associate and add them to the File Set
+Last, we now need to loop through all of our Files we want to associate and add them to the File Set.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__files_
 
-If the fileset you've created is a supported format by the iconik transcoder, you can use our transcoder to create a proxy automatically here.  The iconik transcoder currently only supports single files in a file_set.  If you already are using an unsupported format or you already have a proxy at the time of asset creation, you can upload it.   To use our transcoder, you'd use the following endpoint
+If the fileset you've created is a supported format by the iconik transcoder, you can use our transcoder to create a proxy automatically here.  The iconik transcoder currently only supports single files in a file_set.  If you already are using an unsupported format or you already have a proxy at the time of asset creation, you can upload it.   To use our transcoder, you'd use the following endpoint.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__files__file_id__keyframes_
 
-If you already have a proxy, you'll need to manual create the proxy object and then upload it.  To do so, use this endpoint.
+If you already have a proxy, you'll need to manual create the proxy object and then upload it.  To do so, use this endpoint.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__proxies_
 
 To upload to iconik standard proxy storage, you will get a "upload_url" in your response object from the proxy creation.  This is a pre-signed URL that can be used to get your actual PUT URL.  Simply POST to this url with the following header:  
 `{'x-goog-resumable':'start','Content-Length':'0'}`  
 In the successful response to this POST, you will recieve your full upload URL in the response header in the `location` key.   
 Now upload your proxy file to this location with a PUT.  
-Lastly, you will need to PATCH your proxy file to `"status":"CLOSED"` for it to work properly in iconik and be visible in the UI using this endpoint.
+Lastly, you will need to PATCH your proxy file to `"status":"CLOSED"` for it to work properly in iconik and be visible in the UI using this endpoint.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/patch_v1_assets__asset_id__proxies__proxy_id__
 
-The last task to "complete" the asset will be to upload or generate a keyframe map.   To generate a keyframe map from the proxy you uploaded, just make an empty call to this endpoint.
+The last task to "complete" the asset will be to upload or generate a keyframe map.   To generate a keyframe map from the proxy you uploaded, just make an empty call to this endpoint.  
 https://app.iconik.io/docs/apidocs.html?url=/docs/files/spec/#/operations/default/post_v1_assets__asset_id__proxies__proxy_id__keyframes_
 
 # Summary
