@@ -31,11 +31,13 @@ Below is a process diagram of creating your own "complete" asset by hand in icon
 
 Let's break down the individual bits here.  For this example, I have a DVCProHD Clip from a Panasonic camera in OP-Atom format.  This is represented on my iconik storage gateway (relative to my storage root) by the following files:
 
+```
 Test Content/MXF/AVCI_Card/CONTENTS/VIDEO/0002EM.MXF
 Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/0002EM00.MXF
 Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/0002EM01.MXF
 Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/0002EM02.MXF
 Test Content/MXF/AVCI_Card/CONTENTS/AUDIO/0002EM03.MXF
+```
 
 To register this file all by hand, we'll have to manually generate a proper proxy using H.264 mp4, no b-frames, max raster 1080p, max data rate 6Mb for best performance.  The default configuration for proxies in iconik are 720p raster, target 3Mb, max 4Mb, no b-frames.  You can also manually generate a keyframe map as well, or you can have iconik generate this for you from your proxy.  
 
