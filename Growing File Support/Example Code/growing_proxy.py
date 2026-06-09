@@ -67,7 +67,7 @@ def create_proxy(
 ) -> dict:
     proxy_body = {
         "name": "test_proxy.m3u8",
-        "format": "m3u8",
+        "format": "MPEG4",
         "codec": "",
         "frame_rate": "29.97",
         "resolution": {"width": 1280, "height": 720},
