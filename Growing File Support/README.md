@@ -91,6 +91,7 @@ sequenceDiagram
             D->>S: PUT updated playlist (no #EXT-X-ENDLIST yet)
         end
         D->>S: PUT final playlist with #EXT-X-ENDLIST
+        D->>F: PATCH /files/v1/assets/{asset_id}/proxies/{proxy_id}/ (status CLOSED)
     else Simple proxy (completed file already on disk)
         D->>F: POST /files/v1/assets/{asset_id}/proxies/ → proxy_id, upload_url
         D->>S: Upload completed proxy file to pre-signed URL
@@ -350,7 +351,7 @@ Proceed to [Step 6: Keyframe Generation](#step-6-keyframe-generation).
 
 ## Growing Proxy (HLS / Active Transcode / Live Ingest)
 
-Use this path when your transcoder is producing HLS segments in real time and you want iconik to serve the proxy before the encode finishes. The proxy starts in `OPEN` status, segments are pushed as they are produced, and the proxy is finalized when `#EXT-X-ENDLIST` is written to the master playlist.
+Use this path when your transcoder is producing HLS segments in real time and you want iconik to serve the proxy before the encode finishes. The proxy starts in `GROWING` status, segments are pushed as they are produced, and the proxy is finalized when `#EXT-X-ENDLIST` is written to the master playlist.
 
 ### 1. Fetch the proxy storage
 
@@ -370,7 +371,7 @@ The `method` value (e.g., `GCS`, `S3`, `AZURE`, `B2`) determines which upload ap
 
 ### 2. Create the proxy
 
-Generate a `proxy_container_id` client-side using UUID v1. The proxy is created in `OPEN` status, which tells iconik this proxy is actively growing and not yet complete.
+Generate a `proxy_container_id` client-side using UUID v1. The proxy is created in `GROWING` status, which tells iconik this proxy is actively growing and not yet complete. The `format` is `HLS`.
 
 **Endpoint:** `POST /files/v1/assets/{asset_id}/method/{storage_method}/proxies/`
 
@@ -378,11 +379,11 @@ Generate a `proxy_container_id` client-side using UUID v1. The proxy is created 
 ```json
 {
   "name": "my_proxy.m3u8",
-  "format": "m3u8",
-  "codec": "",
+  "format": "HLS",
+  "codec": "h264",
   "frame_rate": "29.97",
   "resolution": { "width": 1280, "height": 720 },
-  "status": "OPEN",
+  "status": "GROWING",
   "proxy_container_id": "<uuid_v1>"
 }
 ```
@@ -400,7 +401,7 @@ The proxy container holds the structural metadata for the HLS stream. The `segme
 {
   "frame_count": 0,
   "frame_rate": 0,
-  "segment_duration": 6
+  "segment_duration": 7
 }
 ```
 
@@ -473,15 +474,24 @@ Upload to the returned `upload_url` using the method appropriate for your proxy 
 
 As long as more segments are coming, the playlist must not include `#EXT-X-ENDLIST`. This signals to HLS clients that the stream is still growing.
 
+> **Use `#EXT-X-PLAYLIST-TYPE:EVENT`, not `VOD`, while the proxy is growing.** Per [RFC 8216 §6.2.1](https://datatracker.ietf.org/doc/html/rfc8216#section-6.2.1), a playlist tagged `VOD` must never change, so a player loads it exactly once and stops — playback ends at the segments present on the first load and never picks up the ones you append afterwards. `EVENT` tells the player that segments may only be appended to the end, which is exactly what a growing proxy does, and keeps it reloading the playlist on the target-duration interval. Omitting the tag entirely also works; `VOD` is the one value that breaks growing playback.
+
 ```m3u8
 #EXTM3U
 #EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:6
+#EXT-X-TARGETDURATION:7
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:6.000000,
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.539867,
 seq_00000.ts
 ```
+
+Two rules that will silently truncate playback if you get them wrong:
+
+- **Every `#EXTINF` must be followed by the segment URI on the next line.** An `#EXTINF` with no URI after it does not declare a segment — the player skips it, and a segment you uploaded to storage but never named in the playlist is simply never fetched.
+- **`#EXT-X-TARGETDURATION` must be ≥ every `#EXTINF` rounded to the nearest integer** ([RFC 8216 §4.3.3.1](https://datatracker.ietf.org/doc/html/rfc8216#section-4.3.3.1)). A 6.539867s segment rounds to 7, so `#EXT-X-TARGETDURATION:6` is invalid. Because an `EVENT` playlist may only be appended to, this value has to cover every segment the stream will ever contain — set it from your transcoder's configured maximum segment length, not from the first segment you happen to have.
+
+Use the segment's **actual** duration in `#EXTINF`, not the nominal length you configured the transcoder with; real segments land on keyframe boundaries and drift from the target.
 
 Replace the playlist file at the same path each time — you are overwriting it with each update.
 
@@ -492,17 +502,30 @@ When your transcoder signals completion, upload the final playlist with `#EXT-X-
 ```m3u8
 #EXTM3U
 #EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:6
+#EXT-X-TARGETDURATION:7
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:6.000000,
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.539867,
 seq_00000.ts
-#EXTINF:2.125000,
+#EXTINF:5.605600,
 seq_00001.ts
 #EXT-X-ENDLIST
 ```
 
-The `#EXT-X-ENDLIST` tag tells iconik and all HLS clients that the proxy is complete and no more segments are expected.
+The `#EXT-X-ENDLIST` tag tells iconik and all HLS clients that the proxy is complete and no more segments are expected, so they stop reloading the playlist. Keep `#EXT-X-PLAYLIST-TYPE:EVENT` on the final playlist — an ended event is still an event, and `EVENT` plus `#EXT-X-ENDLIST` plays back exactly like VOD.
+
+### Close the proxy
+
+`#EXT-X-ENDLIST` is a signal to players; it does not change the proxy record, which stays in `GROWING` status until you close it explicitly. Send this once the final playlist is on storage:
+
+**Endpoint:** `PATCH /files/v1/assets/{asset_id}/proxies/{proxy_id}/`
+
+**Request body:**
+```json
+{ "status": "CLOSED" }
+```
+
+> Order matters: close the proxy **after** the playlist carrying `#EXT-X-ENDLIST` has been uploaded, never before. Closing a proxy whose playlist is still missing its last segments leaves the asset permanently short.
 
 ---
 
@@ -571,11 +594,12 @@ iconik derives both the keyframe map and the poster frame from your uploaded pro
 A working Python implementation of the complete growing proxy workflow is provided in [`Example Code/growing_proxy.py`](Example%20Code/growing_proxy.py). It demonstrates:
 
 - Fetching the proxy storage and resolving the storage method
-- Creating a proxy in `OPEN` status with a generated `proxy_container_id`
-- Creating the proxy container and both proxy file records
+- Creating a proxy in `GROWING` status with a generated `proxy_container_id`
+- Creating the proxy container and both proxy file records under one shared `directory_path`
 - Getting per-segment pre-signed upload URLs
-- Uploading fake segment data and updating the playlist progressively
-- Finalizing the proxy with `#EXT-X-ENDLIST`
+- Uploading real HLS segments (`Example Code/data/seq_0000*.ts`) and republishing the playlist after each one
+- Selecting the correct upload flow for the proxy storage backend (GCS resumable, Azure block blob, or plain `PUT`)
+- Finalizing the playlist with `#EXT-X-ENDLIST`, then closing the proxy with a `PATCH` to `CLOSED`
 
 **Run it:**
 ```bash
@@ -584,8 +608,11 @@ python "Example Code/growing_proxy.py" \
   --app-id <APP_ID> \
   --asset-id <ASSET_UUID> \
   [--domain https://your-iconik-instance.iconik.cloud] \
+  [--segment-delay 30] \
   [-v]
 ```
+
+The two sample segments it publishes live in [`Example Code/data/`](Example%20Code/data). Lower `--segment-delay` to shorten the simulated transcode gap.
 
 For detailed documentation of each function in the script, see [`Example Code/proxy_upload_docs.md`](Example%20Code/proxy_upload_docs.md).
 
