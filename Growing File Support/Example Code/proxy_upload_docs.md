@@ -16,6 +16,7 @@ This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload wo
 6. [Segment Set and Constants](#segment-set-and-constants)
 7. [Functions](#functions)
    - [build_playlist](#build_playlist)
+   - [get_asset_version_id](#get_asset_version_id)
    - [get_proxy_storage](#get_proxy_storage)
    - [create_proxy](#create_proxy)
    - [create_proxy_container](#create_proxy_container)
@@ -196,6 +197,31 @@ Three properties of the output matter for growing playback:
 
 ---
 
+### `get_asset_version_id`
+
+```python
+def get_asset(api: TestAPI, asset_id: str) -> dict
+def get_asset_version_id(api: TestAPI, asset_id: str) -> str
+```
+
+Resolves the asset version the proxy will be attached to.
+
+- **Method:** `GET`
+- **Endpoint:** `/API/assets/v1/assets/{asset_id}/`
+
+The version is read from the asset, not from the `create_proxy` response, so it is known before any proxy exists and does not depend on what the proxy endpoint echoes back.
+
+Resolution order:
+
+| Source | When used |
+|---|---|
+| `default_version_id` | The asset's current version — preferred whenever present |
+| `versions[0].id` | Fallback for records that only carry the `versions` array |
+
+Raises `RuntimeError` if the asset has no versions.
+
+---
+
 ### `get_proxy_storage`
 
 ```python
@@ -244,12 +270,13 @@ Registers a new proxy record against an asset.
 }
 ```
 
-- **Returns:** A proxy object. Key fields used downstream:
+- **Returns:** A proxy object. Key field used downstream:
 
 | Field | Description |
 |---|---|
 | `id` | UUID of the proxy — used in all subsequent proxy-scoped endpoints |
-| `version_id` | UUID of the asset version this proxy belongs to |
+
+The response also carries a `version_id`, but the script uses the one resolved by [`get_asset_version_id`](#get_asset_version_id) instead.
 
 ---
 
@@ -445,21 +472,22 @@ Fetches and prints the current `.m3u8` HLS playlist as served by the iconik API.
 
 1. Parse CLI arguments.
 2. Instantiate `TestAPI` with domain, token, and app ID.
-3. Call `get_proxy_storage` → extract `storage_id` and `storage_method`.
-4. Generate a `proxy_container_id` using `uuid.uuid1()`.
-5. Call `create_proxy` → extract `proxy_id` and `version_id`.
-6. Call `create_proxy_container` with `segment_duration=TARGET_DURATION` → extract `container_id`.
-7. Generate one `directory_path` (`uuid.uuid1()`) shared by every file in the container.
-8. Call `create_proxy_file` twice, passing that same `directory_path` to both:
+3. Call `get_asset_version_id` → resolve `version_id` from the asset.
+4. Call `get_proxy_storage` → extract `storage_id` and `storage_method`.
+5. Generate a `proxy_container_id` using `uuid.uuid1()`.
+6. Call `create_proxy` → extract `proxy_id`.
+7. Call `create_proxy_container` with `segment_duration=TARGET_DURATION` → extract `container_id`.
+8. Generate one `directory_path` (`uuid.uuid1()`) shared by every file in the container.
+9. Call `create_proxy_file` twice, passing that same `directory_path` to both:
    - Once for the **master playlist** (`file_type="FILE"`, `proxy_sequence_type="HLS_PLAYLIST"`, `name="master.m3u8"`)
    - Once for the **TS segment sequence** (`file_type="SEQUENCE"`, `proxy_sequence_type="A"`, `name="seq_%05d.ts"`, `template="seq_%05d.ts [0-1]"`)
-9. For each entry in `SEGMENTS`, call `publish_segment`, which:
+10. For each entry in `SEGMENTS`, call `publish_segment`, which:
    - uploads the `.ts` file from `data/` to its pre-signed URL, **then**
    - republishes `master.m3u8` including that segment — never the other way round, since a player must not be told about a segment it cannot fetch yet.
    The last segment's playlist is the one that carries `#EXT-X-ENDLIST`.
-10. Print the playlist state via `get_playlist_content` after each publish.
-11. Between segments, sleep `--segment-delay` seconds to simulate active transcoding.
-12. Once the loop finishes — so the playlist with `#EXT-X-ENDLIST` is on storage — call `close_proxy` to move the proxy from `GROWING` to `CLOSED`.
+11. Print the playlist state via `get_playlist_content` after each publish.
+12. Between segments, sleep `--segment-delay` seconds to simulate active transcoding.
+13. Once the loop finishes — so the playlist with `#EXT-X-ENDLIST` is on storage — call `close_proxy` to move the proxy from `GROWING` to `CLOSED`.
 
 ---
 

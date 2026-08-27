@@ -19,19 +19,25 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data"
 
-# (filename, exact duration in seconds). The durations are the real presentation
-# durations of the sample segments, taken from ffprobe:
-#   seq_00000.ts  196 frames @ 30000/1001 = 6.539867s
-#   seq_00001.ts  168 frames @ 30000/1001 = 5.605600s
-# EXTINF values must be the actual segment durations, not the nominal segment
-# length you asked the transcoder for.
-SEGMENTS = [
-    ("seq_00000.ts", 6.539867),
-    ("seq_00001.ts", 5.605600),
-]
-
 FRAME_RATE = 30000 / 1001  # 29.97
 RESOLUTION = {"width": 1280, "height": 720}
+
+# (filename, frame count) for the sample segments in data/, from ffprobe.
+# Frames rather than seconds because iconik derives the playlist it serves from
+# the container's frame_count / frame_rate / segment_duration, so the frame
+# count has to be exact; durations are derived from it.
+SEGMENTS = [
+    ("seq_00000.ts", 196),  # 6.539867s
+    ("seq_00001.ts", 168),  # 5.605600s
+]
+
+TOTAL_FRAMES = sum(frames for _, frames in SEGMENTS)
+
+
+def duration_seconds(frames: int) -> float:
+    """Exact presentation duration of a segment, in seconds."""
+    return frames / FRAME_RATE
+
 
 # RFC 8216 4.3.3.1: every EXTINF, rounded to the nearest integer, must be <= the
 # target duration. The longest segment here is 6.539867s, which rounds to 7.
@@ -40,7 +46,7 @@ RESOLUTION = {"width": 1280, "height": 720}
 # EVENT playlist may only be appended to, so the target duration you write in
 # the first playlist has to hold for the whole stream -- a real transcoder
 # should use its configured maximum segment length here.
-TARGET_DURATION = max(round(duration) for _, duration in SEGMENTS)
+TARGET_DURATION = max(round(duration_seconds(frames)) for _, frames in SEGMENTS)
 
 
 class TestAPI:
@@ -89,10 +95,10 @@ def build_playlist(segment_count: int, complete: bool) -> str:
         "#EXT-X-PLAYLIST-TYPE:EVENT",
     ]
 
-    for name, duration in SEGMENTS[:segment_count]:
+    for name, frames in SEGMENTS[:segment_count]:
         # Every #EXTINF must be followed by the segment URI, otherwise the
         # segment is not part of the playlist and the player will not fetch it.
-        lines.append(f"#EXTINF:{duration:.6f},")
+        lines.append(f"#EXTINF:{duration_seconds(frames):.6f},")
         lines.append(name)
 
     if complete:
@@ -115,6 +121,32 @@ def get_playlist_content(
     )
 
     print(f"Current playlist state\n\n{playlist}")
+
+
+def get_asset(api: TestAPI, asset_id: str) -> dict:
+    """Fetch an asset record."""
+    return api.make_request(f'/API/assets/v1/assets/{asset_id}/', 'get')
+
+
+def get_asset_version_id(api: TestAPI, asset_id: str) -> str:
+    """Resolve the version of the asset the proxy is being attached to.
+
+    Taken from the asset rather than from the proxy creation response, so the
+    version is known up front and does not depend on what the proxy endpoint
+    happens to echo back.
+    """
+    asset = get_asset(api, asset_id)
+
+    # `default_version_id` is the asset's current version. Older records may
+    # only carry the `versions` array.
+    version_id = asset.get("default_version_id")
+    if version_id:
+        return version_id
+
+    versions = asset.get("versions") or []
+    if not versions:
+        raise RuntimeError(f"Asset {asset_id} has no versions to attach a proxy to")
+    return versions[0]["id"]
 
 
 def get_proxy_storage(api: TestAPI) -> dict:
@@ -265,11 +297,14 @@ def publish_segment(
     index: int,
 ) -> None:
     """Upload one segment, then republish the playlist including it."""
-    name, duration = SEGMENTS[index]
+    name, frames = SEGMENTS[index]
     complete = index == len(SEGMENTS) - 1
 
     segment_data = (DATA_DIR / name).read_bytes()
-    logger.info(f"Uploading {name} ({len(segment_data)} bytes, {duration:.6f}s)")
+    logger.info(
+        f"Uploading {name} ({len(segment_data)} bytes, {frames} frames, "
+        f"{duration_seconds(frames):.6f}s)"
+    )
     upload_file_data(
         get_proxy_file_upload_url(api, asset_id, ts_sequence_id, path=name)["upload_url"],
         segment_data,
@@ -341,6 +376,9 @@ def main():
     )
     asset_id = args.asset_id
 
+    version_id = get_asset_version_id(api, asset_id)
+    logger.info(f"Using asset version: id={version_id}")
+
     storage = get_proxy_storage(api)
     storage_id = storage["id"]
     storage_method = storage["method"]
@@ -351,7 +389,6 @@ def main():
 
     proxy = create_proxy(api, asset_id, storage_method, proxy_container_id)
     proxy_id = proxy["id"]
-    version_id = proxy["version_id"]
     logger.info(f"Created proxy: id={proxy_id}")
 
     container = create_proxy_container(
@@ -388,7 +425,9 @@ def main():
         file_type="SEQUENCE",
         proxy_sequence_type="A",
         name="seq_%05d.ts",
-        template=f"seq_%05d.ts [0-{len(SEGMENTS) - 1}]",
+        # The range end is exclusive: "[0-1]" advertises only seq_00000.ts,
+        # which is why the served playlist came back one segment short.
+        template=f"seq_%05d.ts [0-{len(SEGMENTS)}]",
     )
 
     for index in range(len(SEGMENTS)):

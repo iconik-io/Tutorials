@@ -116,7 +116,7 @@ sequenceDiagram
 }
 ```
 
-**Response:** Returns the full asset object. Note the `id` as your `asset_id` and the `id` inside the `versions` array as your `version_id`. Both are needed in subsequent calls.
+**Response:** Returns the full asset object. Note the `id` as your `asset_id`. For the `version_id`, use `default_version_id` — the asset's current version — falling back to the `id` inside the `versions` array on older records. Both are needed in subsequent calls, and you can re-read them at any time with `GET /assets/v1/assets/{asset_id}/`.
 
 ```json
 {
@@ -388,7 +388,9 @@ Generate a `proxy_container_id` client-side using UUID v1. The proxy is created 
 }
 ```
 
-**Response:** Returns `id` as your `proxy_id` and `version_id`.
+**Response:** Returns `id` as your `proxy_id`.
+
+The response also carries a `version_id`, but prefer reading the version from the asset itself — `GET /assets/v1/assets/{asset_id}/`, taking `default_version_id` (falling back to the first entry of `versions`). That gives you the version before any proxy exists, and keeps the value independent of what the proxy endpoint echoes back. You need it to fetch the playlist in [Verifying playback](#verifying-playback).
 
 ### 3. Create the proxy container
 
@@ -514,7 +516,7 @@ seq_00001.ts
 
 The `#EXT-X-ENDLIST` tag tells iconik and all HLS clients that the proxy is complete and no more segments are expected, so they stop reloading the playlist. Keep `#EXT-X-PLAYLIST-TYPE:EVENT` on the final playlist — an ended event is still an event, and `EVENT` plus `#EXT-X-ENDLIST` plays back exactly like VOD.
 
-### Close the proxy
+### 7. Close the proxy
 
 `#EXT-X-ENDLIST` is a signal to players; it does not change the proxy record, which stays in `GROWING` status until you close it explicitly. Send this once the final playlist is on storage:
 
@@ -526,6 +528,22 @@ The `#EXT-X-ENDLIST` tag tells iconik and all HLS clients that the proxy is comp
 ```
 
 > Order matters: close the proxy **after** the playlist carrying `#EXT-X-ENDLIST` has been uploaded, never before. Closing a proxy whose playlist is still missing its last segments leaves the asset permanently short.
+
+### Verifying playback
+
+At any point — while the proxy is still growing, or after it is closed — you can read back the playlist iconik serves to players. This is the fastest way to confirm segments are landing where the playlist expects them.
+
+**Endpoint:** `GET /files/v1/assets/{asset_id}/versions/{version_id}/proxies/{proxy_id}/hls/`
+
+This is where the `version_id` from [Step 1](#step-1-create-the-asset) is needed. The response is the playlist itself, not JSON.
+
+What to look for:
+
+| Symptom | Cause |
+|---|---|
+| Playback stops at the first segment | The playlist is `#EXT-X-PLAYLIST-TYPE:VOD`, or an `#EXTINF` has no URI line after it |
+| Segments 404 | The playlist record and the sequence record have different `directory_path` values |
+| Player rejects the playlist outright | `#EXTM3U` is not the literal first line, or lines carry leading whitespace |
 
 ---
 
