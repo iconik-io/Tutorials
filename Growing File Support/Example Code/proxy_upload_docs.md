@@ -2,7 +2,7 @@
 
 ## Overview
 
-This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload workflow** against the iconik media asset management API. It creates a proxy (a lower-resolution video representation of an asset), uploads fake HLS segments and playlist files to storage, and simulates a progressive transcoding update across two phases.
+This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload workflow** against the iconik media asset management API. It creates a proxy (a lower-resolution video representation of an asset), uploads real HLS segments and playlist files to storage, and simulates a progressive transcoding update across two phases.
 
 ---
 
@@ -13,17 +13,22 @@ This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload wo
 3. [CLI Arguments](#cli-arguments)
 4. [Architecture Overview](#architecture-overview)
 5. [Class: TestAPI](#class-testapi)
-6. [Functions](#functions)
+6. [Segment Set and Constants](#segment-set-and-constants)
+7. [Functions](#functions)
+   - [build_playlist](#build_playlist)
+   - [get_asset_version_id](#get_asset_version_id)
    - [get_proxy_storage](#get_proxy_storage)
    - [create_proxy](#create_proxy)
    - [create_proxy_container](#create_proxy_container)
    - [create_proxy_file](#create_proxy_file)
    - [get_proxy_file_upload_url](#get_proxy_file_upload_url)
    - [upload_file_data](#upload_file_data)
+   - [publish_segment](#publish_segment)
+   - [close_proxy](#close_proxy)
    - [get_playlist_content](#get_playlist_content)
-7. [main() — Full Execution Flow](#main--full-execution-flow)
-8. [Data Models](#data-models)
-9. [HLS Simulation Explained](#hls-simulation-explained)
+8. [main() — Full Execution Flow](#main--full-execution-flow)
+9. [Data Models](#data-models)
+10. [HLS Simulation Explained](#hls-simulation-explained)
 
 ---
 
@@ -31,6 +36,7 @@ This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload wo
 
 - Python 3.10+
 - [`requests`](https://pypi.org/project/requests/) library
+- The sample segments in `data/` (`seq_00000.ts`, `seq_00001.ts`)
 
 Install dependencies:
 
@@ -48,8 +54,11 @@ python script.py \
   --app-id <APP_ID> \
   --asset-id <ASSET_UUID> \
   [--domain https://test.iconik.cloud] \
+  [--segment-delay 30] \
   [-v]
 ```
+
+Run it from this directory, or from anywhere — segment paths resolve relative to the script, not the working directory.
 
 ---
 
@@ -61,6 +70,7 @@ python script.py \
 | `--token` | Yes | — | Auth token (`Auth-Token` header) |
 | `--app-id` | Yes | — | Application ID (`App-ID` header) |
 | `--asset-id` | Yes | — | UUID of the target asset to attach the proxy to |
+| `--segment-delay` | No | `30` | Seconds to wait between segments, simulating transcode time |
 | `-v` / `--verbose` | No | — | Enables `DEBUG`-level logging output |
 
 ---
@@ -105,6 +115,32 @@ Print Playlist State (complete)
 
 ---
 
+## Segment Set and Constants
+
+The segments the script publishes are declared once, at module level:
+
+```python
+SEGMENTS = [
+    ("seq_00000.ts", 6.539867),
+    ("seq_00001.ts", 5.605600),
+]
+
+TARGET_DURATION = max(round(duration) for _, duration in SEGMENTS)  # 7
+```
+
+The durations are the **actual** presentation durations of the sample files, from `ffprobe`:
+
+| Segment | Frames | Frame rate | Duration |
+|---|---|---|---|
+| `seq_00000.ts` | 196 | 30000/1001 | 6.539867s |
+| `seq_00001.ts` | 168 | 30000/1001 | 5.605600s |
+
+Use measured durations, not the nominal segment length configured on the transcoder — segments land on keyframe boundaries and drift from the target. Adding a segment to this list is all that is needed to extend the simulation; the playlist, the target duration and the sequence `template` range are all derived from it.
+
+`TARGET_DURATION` is computed across **all** segments, including ones not published yet, because an `EVENT` playlist may only be appended to — the value written in the first playlist has to hold for the whole stream. A real transcoder should use its configured maximum segment length.
+
+---
+
 ## Class: TestAPI
 
 ```python
@@ -139,6 +175,52 @@ Raises `requests.HTTPError` on any non-2xx response.
 ---
 
 ## Functions
+
+### `build_playlist`
+
+```python
+def build_playlist(segment_count: int, complete: bool) -> str
+```
+
+Renders the master playlist covering the first `segment_count` entries of `SEGMENTS`.
+
+| Parameter | Description |
+|---|---|
+| `segment_count` | How many segments are on storage and safe to advertise |
+| `complete` | When `True`, appends `#EXT-X-ENDLIST` |
+
+Three properties of the output matter for growing playback:
+
+- `#EXTM3U` is the literal first line, with no leading whitespace on any line. An indented playlist is not a valid playlist.
+- Each `#EXTINF` is immediately followed by its segment URI. An `#EXTINF` with no URI after it declares nothing, and the segment is never fetched.
+- The type is `EVENT` and `#EXT-X-ENDLIST` is withheld until the final segment, which is what keeps the player reloading. `VOD` would be wrong: a VOD playlist is defined as never changing, so a player reads it once and stops at whatever it saw first.
+
+---
+
+### `get_asset_version_id`
+
+```python
+def get_asset(api: TestAPI, asset_id: str) -> dict
+def get_asset_version_id(api: TestAPI, asset_id: str) -> str
+```
+
+Resolves the asset version the proxy will be attached to.
+
+- **Method:** `GET`
+- **Endpoint:** `/API/assets/v1/assets/{asset_id}/`
+
+The version is read from the asset, not from the `create_proxy` response, so it is known before any proxy exists and does not depend on what the proxy endpoint echoes back.
+
+Resolution order:
+
+| Source | When used |
+|---|---|
+| `default_version_id` | The asset's current version — preferred whenever present |
+| `versions[0].id` | Fallback for records that only carry the `versions` array |
+
+Raises `RuntimeError` if the asset has no versions.
+
+---
 
 ### `get_proxy_storage`
 
@@ -179,21 +261,22 @@ Registers a new proxy record against an asset.
 ```json
 {
   "name": "test_proxy.m3u8",
-  "format": "m3u8",
-  "codec": "",
+  "format": "HLS",
+  "codec": "h264",
   "frame_rate": "29.97",
   "resolution": { "width": 1280, "height": 720 },
-  "status": "OPEN",
+  "status": "GROWING",
   "proxy_container_id": "<uuid>"
 }
 ```
 
-- **Returns:** A proxy object. Key fields used downstream:
+- **Returns:** A proxy object. Key field used downstream:
 
 | Field | Description |
 |---|---|
 | `id` | UUID of the proxy — used in all subsequent proxy-scoped endpoints |
-| `version_id` | UUID of the asset version this proxy belongs to |
+
+The response also carries a `version_id`, but the script uses the one resolved by [`get_asset_version_id`](#get_asset_version_id) instead.
 
 ---
 
@@ -224,7 +307,7 @@ Creates a container that holds the proxy's files and video structure metadata.
 }
 ```
 
-> **Note:** `segment_duration` must match the `#EXT-X-TARGETDURATION` value in the uploaded HLS playlist.
+> **Note:** `segment_duration` must match the `#EXT-X-TARGETDURATION` value in the uploaded HLS playlist — `7` for the sample segments, since the longest is 6.539867s and RFC 8216 rounds EXTINF to the nearest integer when comparing against the target duration.
 
 - **Returns:** A container object. Key field:
 
@@ -245,7 +328,7 @@ def create_proxy_file(
     storage_id: str,
     file_type: str,
     name: str,
-    directory_path: str | None = None,
+    directory_path: str,
     proxy_sequence_type: str = "A",
     size: int = 0,
     template_engine: str = "SIMPLE",
@@ -267,7 +350,7 @@ Creates a file record inside a proxy container. Used for both the `.m3u8` playli
 | `name` | Filename or pattern. For sequences, use printf-style patterns e.g. `seq_%05d.ts` |
 | `template` | For sequences, defines the pattern and index range e.g. `seq_%05d.ts [0-1]`. Only sent when `file_type == "SEQUENCE"` |
 | `template_engine` | Defaults to `"SIMPLE"`. Only included in the request body for sequences |
-| `directory_path` | Storage subdirectory path. Auto-generated via `uuid.uuid1()` if not provided |
+| `directory_path` | Storage subdirectory path. **Required, and the same value must be passed for the playlist record and the sequence record** — the playlist names its segments by bare filename, so they must resolve alongside `master.m3u8` on storage. Generate one `uuid.uuid1()` per container and reuse it. |
 
 - **Returns:** A file object. Key field:
 
@@ -304,18 +387,65 @@ Fetches a pre-signed upload URL for a specific file or segment.
 ### `upload_file_data`
 
 ```python
-def upload_file_data(upload_url: str, data: bytes, method: str = "PUT")
+def upload_file_data(upload_url: str, data: bytes, storage_method: str)
 ```
 
-Uploads raw bytes directly to a pre-signed URL (S3/GCS-style). This call bypasses the iconik API entirely — no auth headers are sent.
+Uploads raw bytes directly to a pre-signed URL. This call bypasses the iconik API entirely — no auth headers are sent.
 
 | Parameter | Description |
 |---|---|
 | `upload_url` | Pre-signed URL returned by `get_proxy_file_upload_url` |
 | `data` | Raw bytes to upload |
-| `method` | HTTP method — defaults to `"PUT"` to match standard pre-signed URL behaviour |
+| `storage_method` | The `method` from `get_proxy_storage`, which selects the upload flow |
 
-Content-Type is set to `application/octet-stream`.
+The flow differs per backend, so a single plain `PUT` is not portable:
+
+| `storage_method` | Flow |
+|---|---|
+| `GCS` | `POST` with `x-goog-resumable: start` and `Content-Length: 0`, then `PUT` the payload to the URL in the `location` response header |
+| `AZURE` | `PUT` with `x-ms-blob-type: BlockBlob` |
+| `S3`, `B2`, `FILE` | plain `PUT` |
+
+Content-Type is `application/octet-stream` in all cases.
+
+---
+
+### `publish_segment`
+
+```python
+def publish_segment(
+    api: TestAPI,
+    asset_id: str,
+    ts_sequence_id: str,
+    playlist_file_id: str,
+    storage_method: str,
+    index: int,
+) -> None
+```
+
+Publishes one segment: reads `SEGMENTS[index]` from `data/`, uploads it to its pre-signed URL, and only then republishes `master.m3u8` including it. The ordering is deliberate — advertising a segment before it is on storage gives the player a 404 and stalls playback. When `index` is the last entry, the republished playlist carries `#EXT-X-ENDLIST`.
+
+---
+
+### `close_proxy`
+
+```python
+def close_proxy(api: TestAPI, asset_id: str, proxy_id: str) -> dict
+```
+
+Moves the proxy from `GROWING` to `CLOSED`, marking it complete.
+
+- **Method:** `PATCH`
+- **Endpoint:** `/API/files/v1/assets/{asset_id}/proxies/{proxy_id}/`
+- **Request body:**
+
+```json
+{ "status": "CLOSED" }
+```
+
+`#EXT-X-ENDLIST` is a playlist-level signal to HLS clients; it does not change the proxy record. The proxy stays `GROWING` until this call is made.
+
+> Send it **after** the playlist carrying `#EXT-X-ENDLIST` is on storage, never before — closing a proxy whose playlist is still missing its last segments leaves the asset permanently short.
 
 ---
 
@@ -342,20 +472,22 @@ Fetches and prints the current `.m3u8` HLS playlist as served by the iconik API.
 
 1. Parse CLI arguments.
 2. Instantiate `TestAPI` with domain, token, and app ID.
-3. Call `get_proxy_storage` → extract `storage_id` and `storage_method`.
-4. Generate a `proxy_container_id` using `uuid.uuid1()`.
-5. Call `create_proxy` → extract `proxy_id` and `version_id`.
-6. Call `create_proxy_container` with `segment_duration=6` → extract `container_id`.
-7. Call `create_proxy_file` twice:
+3. Call `get_asset_version_id` → resolve `version_id` from the asset.
+4. Call `get_proxy_storage` → extract `storage_id` and `storage_method`.
+5. Generate a `proxy_container_id` using `uuid.uuid1()`.
+6. Call `create_proxy` → extract `proxy_id`.
+7. Call `create_proxy_container` with `segment_duration=TARGET_DURATION` → extract `container_id`.
+8. Generate one `directory_path` (`uuid.uuid1()`) shared by every file in the container.
+9. Call `create_proxy_file` twice, passing that same `directory_path` to both:
    - Once for the **master playlist** (`file_type="FILE"`, `proxy_sequence_type="HLS_PLAYLIST"`, `name="master.m3u8"`)
    - Once for the **TS segment sequence** (`file_type="SEQUENCE"`, `proxy_sequence_type="A"`, `name="seq_%05d.ts"`, `template="seq_%05d.ts [0-1]"`)
-8. Get a pre-signed URL for `seq_00000.ts` and upload fake TS data.
-9. Get a pre-signed URL for `master.m3u8` and upload **Playlist v1** (1 segment, no `#EXT-X-ENDLIST`).
-10. Print the current playlist state via `get_playlist_content`.
-11. Sleep 30 seconds to simulate active transcoding.
-12. Get a pre-signed URL for `seq_00001.ts` and upload fake TS data.
-13. Get a pre-signed URL for `master.m3u8` and upload **Playlist v2** (2 segments + `#EXT-X-ENDLIST`).
-14. Print the final playlist state.
+10. For each entry in `SEGMENTS`, call `publish_segment`, which:
+   - uploads the `.ts` file from `data/` to its pre-signed URL, **then**
+   - republishes `master.m3u8` including that segment — never the other way round, since a player must not be told about a segment it cannot fetch yet.
+   The last segment's playlist is the one that carries `#EXT-X-ENDLIST`.
+11. Print the playlist state via `get_playlist_content` after each publish.
+12. Between segments, sleep `--segment-delay` seconds to simulate active transcoding.
+13. Once the loop finishes — so the playlist with `#EXT-X-ENDLIST` is on storage — call `close_proxy` to move the proxy from `GROWING` to `CLOSED`.
 
 ---
 
@@ -377,11 +509,11 @@ Fetches and prints the current `.m3u8` HLS playlist as served by the iconik API.
   "id": "<uuid>",
   "version_id": "<uuid>",
   "name": "test_proxy.m3u8",
-  "format": "m3u8",
-  "codec": "",
+  "format": "HLS",
+  "codec": "h264",
   "frame_rate": "29.97",
   "resolution": { "width": 1280, "height": 720 },
-  "status": "OPEN",
+  "status": "GROWING",
   "proxy_container_id": "<uuid>"
 }
 ```
@@ -450,28 +582,28 @@ The script simulates a **progressive HLS transcode** using two playlist states:
 ```m3u8
 #EXTM3U
 #EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:6
+#EXT-X-TARGETDURATION:7
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:6.000000,
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.539867,
 seq_00000.ts
 ```
 
-The absence of `#EXT-X-ENDLIST` signals to HLS clients that the stream is not yet complete and more segments are expected.
+The `EVENT` playlist type plus the absence of `#EXT-X-ENDLIST` signals to HLS clients that the stream is not yet complete and more segments are expected, so they keep reloading the playlist. Do not use `#EXT-X-PLAYLIST-TYPE:VOD` here — a VOD playlist is defined as never changing, so the player reads it once and stops instead of picking up the segments appended later.
 
 **Playlist v2 — Transcode complete (with `#EXT-X-ENDLIST`)**
 
 ```m3u8
 #EXTM3U
 #EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:6
+#EXT-X-TARGETDURATION:7
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:6.000000,
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.539867,
 seq_00000.ts
-#EXTINF:2.125000,
+#EXTINF:5.605600,
 seq_00001.ts
 #EXT-X-ENDLIST
 ```
 
-The presence of `#EXT-X-ENDLIST` signals that all segments have been written and the VOD asset is fully available. This mirrors the behaviour of a real transcoder progressively writing segments during encoding.
+The presence of `#EXT-X-ENDLIST` signals that all segments have been written and the asset is fully available, and the player stops reloading. The proxy record is then closed separately via `close_proxy`. This mirrors the behaviour of a real transcoder progressively writing segments during encoding.

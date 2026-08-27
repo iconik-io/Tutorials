@@ -1,14 +1,52 @@
 #!/usr/bin/env python3
+"""Attach a growing HLS proxy to an iconik asset.
+
+Simulates a transcoder that emits HLS segments over time: the proxy is created
+in GROWING status, the first segment and a playlist are published so the asset
+is playable immediately, and the proxy is finalised once the last segment lands.
+"""
 
 import logging
 import argparse
 import time
 import uuid
+from pathlib import Path
 
 import requests
 from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
+
+DATA_DIR = Path(__file__).parent / "data"
+
+FRAME_RATE = 30000 / 1001  # 29.97
+RESOLUTION = {"width": 1280, "height": 720}
+
+# (filename, frame count) for the sample segments in data/, from ffprobe.
+# Frames rather than seconds because iconik derives the playlist it serves from
+# the container's frame_count / frame_rate / segment_duration, so the frame
+# count has to be exact; durations are derived from it.
+SEGMENTS = [
+    ("seq_00000.ts", 196),  # 6.539867s
+    ("seq_00001.ts", 168),  # 5.605600s
+]
+
+TOTAL_FRAMES = sum(frames for _, frames in SEGMENTS)
+
+
+def duration_seconds(frames: int) -> float:
+    """Exact presentation duration of a segment, in seconds."""
+    return frames / FRAME_RATE
+
+
+# RFC 8216 4.3.3.1: every EXTINF, rounded to the nearest integer, must be <= the
+# target duration. The longest segment here is 6.539867s, which rounds to 7.
+#
+# This is computed over *all* segments, including ones not published yet. An
+# EVENT playlist may only be appended to, so the target duration you write in
+# the first playlist has to hold for the whole stream -- a real transcoder
+# should use its configured maximum segment length here.
+TARGET_DURATION = max(round(duration_seconds(frames)) for _, frames in SEGMENTS)
 
 
 class TestAPI:
@@ -40,6 +78,37 @@ class TestAPI:
         return response.text
 
 
+def build_playlist(segment_count: int, complete: bool) -> str:
+    """Render the master playlist for the first `segment_count` segments.
+
+    While the proxy is still growing the playlist is EVENT and carries no
+    #EXT-X-ENDLIST, which is what keeps the player reloading it and picking up
+    newly appended segments. #EXT-X-PLAYLIST-TYPE:VOD would be wrong here: a VOD
+    playlist is defined as never changing, so a player reads it exactly once and
+    stops at whatever it saw on the first load.
+    """
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        f"#EXT-X-TARGETDURATION:{TARGET_DURATION}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:EVENT",
+    ]
+
+    for name, frames in SEGMENTS[:segment_count]:
+        # Every #EXTINF must be followed by the segment URI, otherwise the
+        # segment is not part of the playlist and the player will not fetch it.
+        lines.append(f"#EXTINF:{duration_seconds(frames):.6f},")
+        lines.append(name)
+
+    if complete:
+        lines.append("#EXT-X-ENDLIST")
+
+    # A trailing newline, and no leading whitespace anywhere: #EXTM3U must be
+    # the literal first line of the file.
+    return "\n".join(lines) + "\n"
+
+
 def get_playlist_content(
     api: TestAPI,
     asset_id: str,
@@ -52,6 +121,32 @@ def get_playlist_content(
     )
 
     print(f"Current playlist state\n\n{playlist}")
+
+
+def get_asset(api: TestAPI, asset_id: str) -> dict:
+    """Fetch an asset record."""
+    return api.make_request(f'/API/assets/v1/assets/{asset_id}/', 'get')
+
+
+def get_asset_version_id(api: TestAPI, asset_id: str) -> str:
+    """Resolve the version of the asset the proxy is being attached to.
+
+    Taken from the asset rather than from the proxy creation response, so the
+    version is known up front and does not depend on what the proxy endpoint
+    happens to echo back.
+    """
+    asset = get_asset(api, asset_id)
+
+    # `default_version_id` is the asset's current version. Older records may
+    # only carry the `versions` array.
+    version_id = asset.get("default_version_id")
+    if version_id:
+        return version_id
+
+    versions = asset.get("versions") or []
+    if not versions:
+        raise RuntimeError(f"Asset {asset_id} has no versions to attach a proxy to")
+    return versions[0]["id"]
 
 
 def get_proxy_storage(api: TestAPI) -> dict:
@@ -67,11 +162,11 @@ def create_proxy(
 ) -> dict:
     proxy_body = {
         "name": "test_proxy.m3u8",
-        "format": "MPEG4",
-        "codec": "",
-        "frame_rate": "29.97",
-        "resolution": {"width": 1280, "height": 720},
-        "status": "OPEN",
+        "format": "HLS",
+        "codec": "h264",
+        "frame_rate": f"{FRAME_RATE:.2f}",
+        "resolution": RESOLUTION,
+        "status": "GROWING",
         "proxy_container_id": str(proxy_container_id),
     }
     url = f'/API/files/v1/assets/{asset_id}/method/{storage_method}/proxies/'
@@ -84,7 +179,7 @@ def create_proxy_container(
     proxy_id: str,
     frame_count: int = 0,
     frame_rate: float = 0,
-    segment_duration: float = 6,
+    segment_duration: float = TARGET_DURATION,
 ) -> dict:
     container_body = {
         "frame_count": frame_count,
@@ -102,17 +197,19 @@ def create_proxy_file(
     container_id: str,
     storage_id: str,
     file_type: str,
-    name: str ,
-    directory_path: str | None = None,
+    name: str,
+    directory_path: str,
     proxy_sequence_type: str = "A",
     size: int = 0,
     template_engine: str = "SIMPLE",
     template: str | None = None,
 ) -> dict:
-    """Create a proxy file inside a proxy container."""
-    if directory_path is None:
-        directory_path = str(uuid.uuid1())
+    """Create a proxy file inside a proxy container.
 
+    `directory_path` is required rather than defaulted: the playlist record and
+    the segment sequence record must share one directory, or the relative
+    segment names in the playlist will not resolve on storage.
+    """
     file_body = {
         "name": name,
         "original_name": name,
@@ -137,6 +234,21 @@ def create_proxy_file(
     return api.make_request(url, 'post', json=file_body)
 
 
+def close_proxy(
+    api: TestAPI,
+    asset_id: str,
+    proxy_id: str,
+) -> dict:
+    """Move a GROWING proxy to CLOSED once the final playlist is published.
+
+    #EXT-X-ENDLIST tells players the stream is over, but the proxy record stays
+    GROWING until it is closed explicitly. Send this only after the playlist
+    carrying #EXT-X-ENDLIST is on storage.
+    """
+    url = f'/API/files/v1/assets/{asset_id}/proxies/{proxy_id}/'
+    return api.make_request(url, 'patch', json={"status": "CLOSED"})
+
+
 def get_proxy_file_upload_url(
     api: TestAPI,
     asset_id: str,
@@ -148,11 +260,69 @@ def get_proxy_file_upload_url(
     return api.make_request(url, "get", params=params)
 
 
-def upload_file_data(upload_url: str, data: bytes, method: str = "PUT"):
-    headers = {"Content-Type": "application/octet-stream"}
-    response = getattr(requests, method.lower())(upload_url, data=data, headers=headers)
+def upload_file_data(upload_url: str, data: bytes, storage_method: str):
+    """Upload bytes to a pre-signed URL using the right flow for the backend."""
+    method = storage_method.upper()
+
+    if method == "GCS":
+        # GCS pre-signed URLs are resumable-upload starts: POST to begin the
+        # session, then PUT the payload to the URL in the location header.
+        start = requests.post(
+            upload_url,
+            headers={"x-goog-resumable": "start", "Content-Length": "0"},
+        )
+        start.raise_for_status()
+        upload_url = start.headers["location"]
+        headers = {"Content-Type": "application/octet-stream"}
+    elif method == "AZURE":
+        headers = {
+            "x-ms-blob-type": "BlockBlob",
+            "Content-Type": "application/octet-stream",
+        }
+    else:
+        # S3, B2 and filesystem storages take a plain PUT.
+        headers = {"Content-Type": "application/octet-stream"}
+
+    response = requests.put(upload_url, data=data, headers=headers)
     response.raise_for_status()
     return response
+
+
+def publish_segment(
+    api: TestAPI,
+    asset_id: str,
+    ts_sequence_id: str,
+    playlist_file_id: str,
+    storage_method: str,
+    index: int,
+) -> None:
+    """Upload one segment, then republish the playlist including it."""
+    name, frames = SEGMENTS[index]
+    complete = index == len(SEGMENTS) - 1
+
+    segment_data = (DATA_DIR / name).read_bytes()
+    logger.info(
+        f"Uploading {name} ({len(segment_data)} bytes, {frames} frames, "
+        f"{duration_seconds(frames):.6f}s)"
+    )
+    upload_file_data(
+        get_proxy_file_upload_url(api, asset_id, ts_sequence_id, path=name)["upload_url"],
+        segment_data,
+        storage_method,
+    )
+
+    # The playlist is republished after the segment is on storage, never before
+    # -- a player must not be told about a segment it cannot fetch yet.
+    playlist = build_playlist(segment_count=index + 1, complete=complete)
+    logger.info(
+        f"Publishing playlist with {index + 1} segment(s)"
+        f"{' and #EXT-X-ENDLIST' if complete else ''}"
+    )
+    upload_file_data(
+        get_proxy_file_upload_url(api, asset_id, playlist_file_id)["upload_url"],
+        playlist.encode("utf-8"),
+        storage_method,
+    )
 
 
 def main():
@@ -177,6 +347,13 @@ def main():
         required=True,
         help='Asset ID to attach the proxy to',
     )
+    parser.add_argument(
+        '--segment-delay',
+        type=float,
+        default=30.0,
+        help='Seconds to wait between segments, simulating transcode time '
+             '(default: 30)',
+    )
 
     parser.add_argument(
         "-v", "--verbose",
@@ -199,6 +376,9 @@ def main():
     )
     asset_id = args.asset_id
 
+    version_id = get_asset_version_id(api, asset_id)
+    logger.info(f"Using asset version: id={version_id}")
+
     storage = get_proxy_storage(api)
     storage_id = storage["id"]
     storage_method = storage["method"]
@@ -209,15 +389,19 @@ def main():
 
     proxy = create_proxy(api, asset_id, storage_method, proxy_container_id)
     proxy_id = proxy["id"]
-    version_id = proxy["version_id"]
     logger.info(f"Created proxy: id={proxy_id}")
 
     container = create_proxy_container(
-        api, asset_id, proxy_id, segment_duration=6
+        api, asset_id, proxy_id, segment_duration=TARGET_DURATION
     )
 
     container_id = container["id"]
     logger.info(f"Created container: id={container_id}")
+
+    # One directory for the whole container. The playlist refers to segments by
+    # bare filename, so they have to sit alongside master.m3u8 on storage.
+    directory_path = str(uuid.uuid1())
+    logger.info(f"Proxy files directory: {directory_path}")
 
     playlist_file = create_proxy_file(
         api,
@@ -225,6 +409,7 @@ def main():
         proxy_id=proxy_id,
         container_id=container_id,
         storage_id=storage_id,
+        directory_path=directory_path,
         name="master.m3u8",
         file_type="FILE",
         proxy_sequence_type="HLS_PLAYLIST",
@@ -236,69 +421,40 @@ def main():
         proxy_id=proxy_id,
         container_id=container_id,
         storage_id=storage_id,
+        directory_path=directory_path,
         file_type="SEQUENCE",
         proxy_sequence_type="A",
         name="seq_%05d.ts",
-        template="seq_%05d.ts [0-1]",
+        # The range end is exclusive: "[0-1]" advertises only seq_00000.ts,
+        # which is why the served playlist came back one segment short.
+        template=f"seq_%05d.ts [0-{len(SEGMENTS)}]",
     )
 
-    playlist_data1 = """
-        #EXTM3U
-        #EXT-X-VERSION:3
-        #EXT-X-TARGETDURATION:6
-        #EXT-X-MEDIA-SEQUENCE:0
-        #EXT-X-PLAYLIST-TYPE:VOD
-        #EXTINF:6.000000,
-        seq_00000.ts
-    """
-    upload_file_data(
-        get_proxy_file_upload_url(api, asset_id, ts_sequence["id"], path="seq_00000.ts")["upload_url"],
-        b"FAKE_TS_DATA_00000",
-    )
+    for index in range(len(SEGMENTS)):
+        if index:
+            logger.warning(
+                f"Sleeping for {args.segment_delay:g} seconds, pretending the "
+                "transcoder is producing the next segment..."
+            )
+            time.sleep(args.segment_delay)
 
-    upload_file_data(
-        get_proxy_file_upload_url(api, asset_id, playlist_file["id"])["upload_url"],
-        playlist_data1.encode("utf-8"),
-    )
+        publish_segment(
+            api,
+            asset_id=asset_id,
+            ts_sequence_id=ts_sequence["id"],
+            playlist_file_id=playlist_file["id"],
+            storage_method=storage_method,
+            index=index,
+        )
 
-    get_playlist_content(
-        api, asset_id=asset_id, version_id=version_id, proxy_id=proxy_id
-    )
+        get_playlist_content(
+            api, asset_id=asset_id, version_id=version_id, proxy_id=proxy_id
+        )
 
-    logger.warning(
-        "Sleeping for 30 seconds pretending that the transcoding is "
-        "happening and the playlist is being updated with new segments..."
-    )
-
-
-    time.sleep(30)
-
-    playlist_data2 = """
-        #EXTM3U
-        #EXT-X-VERSION:3
-        #EXT-X-TARGETDURATION:6
-        #EXT-X-MEDIA-SEQUENCE:0
-        #EXT-X-PLAYLIST-TYPE:VOD
-        #EXTINF:6.000000,
-        seq_00000.ts
-        #EXTINF:2.125000,
-        seq_00001.ts
-        #EXT-X-ENDLIST
-    """
-
-    upload_file_data(
-        get_proxy_file_upload_url(api, asset_id, ts_sequence["id"], path="seq_00001.ts")["upload_url"],
-        b"FAKE_TS_DATA_00000",
-    )
-
-    upload_file_data(
-        get_proxy_file_upload_url(api, asset_id, playlist_file["id"])["upload_url"],
-        playlist_data2.encode("utf-8"),
-    )
-
-    get_playlist_content(
-        api, asset_id=asset_id, version_id=version_id, proxy_id=proxy_id
-    )
+    # The last playlist published above carries #EXT-X-ENDLIST, so the proxy is
+    # complete and can be closed.
+    closed = close_proxy(api, asset_id, proxy_id)
+    logger.info(f"Closed proxy: id={proxy_id}, status={closed.get('status')}")
 
 
 if __name__ == '__main__':
