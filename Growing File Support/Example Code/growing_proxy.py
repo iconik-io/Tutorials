@@ -4,6 +4,12 @@
 Simulates a transcoder that emits HLS segments over time: the proxy is created
 in GROWING status, the first segment and a playlist are published so the asset
 is playable immediately, and the proxy is finalised once the last segment lands.
+
+By default each segment carries muxed audio and video. With
+--separate-audio-video the proxy is published as separate renditions instead: a
+master playlist that points at a video media playlist and an audio media
+playlist, each with its own segments. This is the layout iconik serves for DRM
+proxies, minus the DRM.
 """
 
 import logging
@@ -33,10 +39,66 @@ SEGMENTS = [
 
 TOTAL_FRAMES = sum(frames for _, frames in SEGMENTS)
 
+# The same two segments split into video-only and audio-only TS files, used by
+# --separate-audio-video. They were cut from the muxed files with stream copy
+# and -copyts, so timestamps (and therefore A/V sync) carry over unchanged:
+#
+#   ffmpeg -copyts -i seq_00000.ts -map 0:v -c copy -muxdelay 0 video_00000.ts
+#   ffmpeg -copyts -i seq_00000.ts -map 0:a -c copy -muxdelay 0 audio_00000.ts
+#
+# Video is counted in video frames, like SEGMENTS.
+VIDEO_SEGMENTS = [
+    ("video_00000.ts", 196),  # 6.539867s
+    ("video_00001.ts", 168),  # 5.605600s
+]
+
+# Audio is counted in AAC frames. An AAC frame is 1024 samples, so audio
+# segment boundaries do not line up with video frames and each audio segment
+# has its own duration -- write that, not the video segment's.
+AAC_SAMPLE_RATE = 48000
+AAC_FRAME_SAMPLES = 1024
+AUDIO_SEGMENTS = [
+    ("audio_00000.ts", 305),  # 6.506667s
+    ("audio_00001.ts", 263),  # 5.610667s
+]
+
+# CODECS for the master playlist. avc1.640029 is H.264 High (0x64), no
+# constraint flags (0x00), level 4.1 (0x29), read from the SPS of the sample
+# video; mp4a.40.2 is AAC-LC.
+CODECS = "avc1.640029,mp4a.40.2"
+
 
 def duration_seconds(frames: int) -> float:
-    """Exact presentation duration of a segment, in seconds."""
+    """Exact presentation duration of a video segment, in seconds."""
     return frames / FRAME_RATE
+
+
+def audio_duration_seconds(aac_frames: int) -> float:
+    """Exact presentation duration of an audio segment, in seconds."""
+    return aac_frames * AAC_FRAME_SAMPLES / AAC_SAMPLE_RATE
+
+
+def playlist_entries(segments: list[tuple[str, int]], duration_fn) -> list[tuple[str, float]]:
+    """Turn (name, frame count) pairs into (name, seconds) playlist entries."""
+    return [(name, duration_fn(frames)) for name, frames in segments]
+
+
+MUXED_ENTRIES = playlist_entries(SEGMENTS, duration_seconds)
+VIDEO_ENTRIES = playlist_entries(VIDEO_SEGMENTS, duration_seconds)
+AUDIO_ENTRIES = playlist_entries(AUDIO_SEGMENTS, audio_duration_seconds)
+
+assert len(MUXED_ENTRIES) == len(VIDEO_ENTRIES) == len(AUDIO_ENTRIES), \
+    "every segment list must cover the same segments"
+
+# Proxy file record names. Segment names must be letters/underscores, then
+# digits, then the extension -- iconik matches segment URIs to records by
+# replacing the digits with a printf pattern (seq_00001.ts -> seq_%05d.ts).
+MASTER_PLAYLIST = "master.m3u8"
+MUXED_SEQUENCE = "seq_%05d.ts"
+VIDEO_PLAYLIST = "video.m3u8"
+AUDIO_PLAYLIST = "audio.m3u8"
+VIDEO_SEQUENCE = "video_%05d.ts"
+AUDIO_SEQUENCE = "audio_%05d.ts"
 
 
 # RFC 8216 4.3.3.1: every EXTINF, rounded to the nearest integer, must be <= the
@@ -46,7 +108,29 @@ def duration_seconds(frames: int) -> float:
 # EVENT playlist may only be appended to, so the target duration you write in
 # the first playlist has to hold for the whole stream -- a real transcoder
 # should use its configured maximum segment length here.
-TARGET_DURATION = max(round(duration_seconds(frames)) for _, frames in SEGMENTS)
+#
+# It covers every segment list, so one value holds for the muxed playlist and
+# for both media playlists in --separate-audio-video mode.
+TARGET_DURATION = max(
+    round(duration)
+    for _, duration in MUXED_ENTRIES + VIDEO_ENTRIES + AUDIO_ENTRIES
+)
+
+
+def peak_bandwidth() -> int:
+    """BANDWIDTH for the master playlist, in bits per second.
+
+    RFC 8216 4.3.4.2 defines BANDWIDTH as the peak segment bit rate of the
+    variant *including* its audio rendition, so each video segment is summed
+    with the audio segment alongside it.
+    """
+    return max(
+        round(
+            ((DATA_DIR / video).stat().st_size + (DATA_DIR / audio).stat().st_size)
+            * 8 / video_duration
+        )
+        for (video, video_duration), (audio, _) in zip(VIDEO_ENTRIES, AUDIO_ENTRIES)
+    )
 
 
 class TestAPI:
@@ -78,8 +162,10 @@ class TestAPI:
         return response.text
 
 
-def build_playlist(segment_count: int, complete: bool) -> str:
-    """Render the master playlist for the first `segment_count` segments.
+def build_media_playlist(entries: list[tuple[str, float]], complete: bool) -> str:
+    """Render a media playlist listing `entries`, as (filename, seconds) pairs.
+
+    Pass only the segments that are already on storage.
 
     While the proxy is still growing the playlist is EVENT and carries no
     #EXT-X-ENDLIST, which is what keeps the player reloading it and picking up
@@ -95,10 +181,10 @@ def build_playlist(segment_count: int, complete: bool) -> str:
         "#EXT-X-PLAYLIST-TYPE:EVENT",
     ]
 
-    for name, frames in SEGMENTS[:segment_count]:
+    for name, duration in entries:
         # Every #EXTINF must be followed by the segment URI, otherwise the
         # segment is not part of the playlist and the player will not fetch it.
-        lines.append(f"#EXTINF:{duration_seconds(frames):.6f},")
+        lines.append(f"#EXTINF:{duration:.6f},")
         lines.append(name)
 
     if complete:
@@ -109,18 +195,55 @@ def build_playlist(segment_count: int, complete: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_master_playlist() -> str:
+    """Render the master playlist for --separate-audio-video.
+
+    This is the minimum a master needs to tie a video rendition to a separate
+    audio rendition. It never changes while the proxy grows -- only the media
+    playlists it points at do -- so it is uploaded once, up front, and it never
+    carries #EXT-X-ENDLIST (that is a media playlist tag).
+
+    #EXT-X-MEDIA: TYPE, GROUP-ID and NAME are required. URI points at the audio
+    media playlist; DEFAULT=YES makes players pick it without being asked.
+    Optional attributes such as AUTOSELECT, CHANNELS and LANGUAGE are left out.
+
+    #EXT-X-STREAM-INF: BANDWIDTH is required. AUDIO links the variant to the
+    #EXT-X-MEDIA group. CODECS is optional per the RFC but players use it to set
+    up the separate audio decoder, so keep it. RESOLUTION and FRAME-RATE are
+    optional and left out.
+
+    The URIs are bare filenames. iconik rewrites them to
+    .../hls/?path=<filename> when it serves the master, and resolves each one
+    to the HLS_PLAYLIST proxy file record with that name.
+    """
+    lines = [
+        "#EXTM3U",
+        f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT=YES,URI="{AUDIO_PLAYLIST}"',
+        f'#EXT-X-STREAM-INF:BANDWIDTH={peak_bandwidth()},CODECS="{CODECS}",AUDIO="audio"',
+        VIDEO_PLAYLIST,
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def get_playlist_content(
     api: TestAPI,
     asset_id: str,
     version_id: str,
     proxy_id: str,
+    path: str = "",
 ) -> None:
+    """Print a playlist as iconik serves it to players.
+
+    Without `path` this is the master playlist. With `path` it is the media
+    playlist of that name -- the same URL iconik writes into the master.
+    """
+    params = {"path": path} if path else {}
     playlist = api.make_request(
         f"/API/files/v1/assets/{asset_id}/versions/{version_id}/proxies/{proxy_id}/hls/",
-        "get", json_data=False
+        "get", json_data=False, params=params,
     )
 
-    print(f"Current playlist state\n\n{playlist}")
+    print(f"Current playlist state ({path or 'master'})\n\n{playlist}")
 
 
 def get_asset(api: TestAPI, asset_id: str) -> dict:
@@ -288,6 +411,55 @@ def upload_file_data(upload_url: str, data: bytes, storage_method: str):
     return response
 
 
+def upload_proxy_file(
+    api: TestAPI,
+    asset_id: str,
+    file_id: str,
+    data: bytes,
+    storage_method: str,
+    path: str = "",
+) -> None:
+    """Fetch a pre-signed upload URL for a proxy file and upload `data` to it.
+
+    `path` names the member of a SEQUENCE record (e.g. seq_00000.ts); leave it
+    empty for a FILE record such as a playlist.
+    """
+    upload_url = get_proxy_file_upload_url(api, asset_id, file_id, path=path)["upload_url"]
+    upload_file_data(upload_url, data, storage_method)
+
+
+def upload_segment(
+    api: TestAPI,
+    asset_id: str,
+    sequence_id: str,
+    storage_method: str,
+    name: str,
+    duration: float,
+) -> None:
+    """Upload one segment from data/ into a SEQUENCE proxy file record."""
+    segment_data = (DATA_DIR / name).read_bytes()
+    logger.info(f"Uploading {name} ({len(segment_data)} bytes, {duration:.6f}s)")
+    upload_proxy_file(api, asset_id, sequence_id, segment_data, storage_method, path=name)
+
+
+def upload_playlist(
+    api: TestAPI,
+    asset_id: str,
+    playlist_file_id: str,
+    storage_method: str,
+    name: str,
+    entries: list[tuple[str, float]],
+    complete: bool,
+) -> None:
+    """Render a media playlist and overwrite the playlist record with it."""
+    logger.info(
+        f"Publishing {name} with {len(entries)} segment(s)"
+        f"{' and #EXT-X-ENDLIST' if complete else ''}"
+    )
+    playlist = build_media_playlist(entries, complete=complete)
+    upload_proxy_file(api, asset_id, playlist_file_id, playlist.encode("utf-8"), storage_method)
+
+
 def publish_segment(
     api: TestAPI,
     asset_id: str,
@@ -296,33 +468,160 @@ def publish_segment(
     storage_method: str,
     index: int,
 ) -> None:
-    """Upload one segment, then republish the playlist including it."""
-    name, frames = SEGMENTS[index]
-    complete = index == len(SEGMENTS) - 1
+    """Upload one muxed segment, then republish the playlist including it."""
+    complete = index == len(MUXED_ENTRIES) - 1
 
-    segment_data = (DATA_DIR / name).read_bytes()
-    logger.info(
-        f"Uploading {name} ({len(segment_data)} bytes, {frames} frames, "
-        f"{duration_seconds(frames):.6f}s)"
-    )
-    upload_file_data(
-        get_proxy_file_upload_url(api, asset_id, ts_sequence_id, path=name)["upload_url"],
-        segment_data,
-        storage_method,
-    )
+    upload_segment(api, asset_id, ts_sequence_id, storage_method, *MUXED_ENTRIES[index])
 
     # The playlist is republished after the segment is on storage, never before
     # -- a player must not be told about a segment it cannot fetch yet.
-    playlist = build_playlist(segment_count=index + 1, complete=complete)
-    logger.info(
-        f"Publishing playlist with {index + 1} segment(s)"
-        f"{' and #EXT-X-ENDLIST' if complete else ''}"
+    upload_playlist(
+        api, asset_id, playlist_file_id, storage_method,
+        name=MASTER_PLAYLIST, entries=MUXED_ENTRIES[:index + 1], complete=complete,
     )
-    upload_file_data(
-        get_proxy_file_upload_url(api, asset_id, playlist_file_id)["upload_url"],
-        playlist.encode("utf-8"),
-        storage_method,
+
+
+def publish_separate_av_segment(
+    api: TestAPI,
+    asset_id: str,
+    files: dict[str, str],
+    storage_method: str,
+    index: int,
+) -> None:
+    """Upload one video and one audio segment, then republish both media playlists.
+
+    The first call also publishes the master playlist.
+
+    `files` maps each record name registered by register_separate_av_files to
+    its proxy file id.
+    """
+    complete = index == len(VIDEO_ENTRIES) - 1
+
+    upload_segment(api, asset_id, files[VIDEO_SEQUENCE], storage_method, *VIDEO_ENTRIES[index])
+    upload_segment(api, asset_id, files[AUDIO_SEQUENCE], storage_method, *AUDIO_ENTRIES[index])
+
+    # Both segments are on storage before either playlist advertises them, so
+    # a player never sees video it has no audio for (or the other way round).
+    upload_playlist(
+        api, asset_id, files[VIDEO_PLAYLIST], storage_method,
+        name=VIDEO_PLAYLIST, entries=VIDEO_ENTRIES[:index + 1], complete=complete,
     )
+    upload_playlist(
+        api, asset_id, files[AUDIO_PLAYLIST], storage_method,
+        name=AUDIO_PLAYLIST, entries=AUDIO_ENTRIES[:index + 1], complete=complete,
+    )
+
+    # The master never changes, so it goes up once. Same rule one level up: it
+    # is published only after the media playlists it points at are on storage.
+    if index == 0:
+        logger.info(f"Publishing {MASTER_PLAYLIST}")
+        upload_proxy_file(
+            api, asset_id, files[MASTER_PLAYLIST],
+            build_master_playlist().encode("utf-8"), storage_method,
+        )
+
+
+def register_muxed_files(
+    api: TestAPI,
+    asset_id: str,
+    proxy_id: str,
+    container_id: str,
+    storage_id: str,
+    directory_path: str,
+) -> dict[str, str]:
+    """Create the proxy file records for a single muxed rendition.
+
+    Returns a map of record name to proxy file id.
+    """
+    playlist_file = create_proxy_file(
+        api,
+        asset_id=asset_id,
+        proxy_id=proxy_id,
+        container_id=container_id,
+        storage_id=storage_id,
+        directory_path=directory_path,
+        name=MASTER_PLAYLIST,
+        file_type="FILE",
+        proxy_sequence_type="HLS_PLAYLIST",
+    )
+
+    ts_sequence = create_proxy_file(
+        api,
+        asset_id=asset_id,
+        proxy_id=proxy_id,
+        container_id=container_id,
+        storage_id=storage_id,
+        directory_path=directory_path,
+        file_type="SEQUENCE",
+        proxy_sequence_type="A",
+        name=MUXED_SEQUENCE,
+        # The range end is exclusive: "[0-1]" advertises only seq_00000.ts,
+        # which is why the served playlist came back one segment short.
+        template=f"{MUXED_SEQUENCE} [0-{len(MUXED_ENTRIES)}]",
+    )
+
+    return {MASTER_PLAYLIST: playlist_file["id"], MUXED_SEQUENCE: ts_sequence["id"]}
+
+
+def register_separate_av_files(
+    api: TestAPI,
+    asset_id: str,
+    proxy_id: str,
+    container_id: str,
+    storage_id: str,
+    directory_path: str,
+) -> dict[str, str]:
+    """Create the proxy file records for separate video and audio renditions.
+
+    Three playlists and two segment sequences:
+
+      master.m3u8     FILE      HLS_PLAYLIST
+      video.m3u8      FILE      HLS_PLAYLIST
+      audio.m3u8      FILE      HLS_PLAYLIST
+      video_%05d.ts   SEQUENCE  A
+      audio_%05d.ts   SEQUENCE  A
+
+    Returns a map of record name to proxy file id.
+    """
+    files = {}
+
+    # iconik finds the playlist for hls/?path=<name> by turning <name> into a
+    # sequence pattern -- digits become %d -- and comparing that with record
+    # names. video.m3u8 and audio.m3u8 have no digits, so the pattern is the
+    # name itself and plain FILE records work. A name like stream_0.m3u8 would
+    # become stream_%d.m3u8 and need a SEQUENCE record with that name instead.
+    for name in (MASTER_PLAYLIST, VIDEO_PLAYLIST, AUDIO_PLAYLIST):
+        files[name] = create_proxy_file(
+            api,
+            asset_id=asset_id,
+            proxy_id=proxy_id,
+            container_id=container_id,
+            storage_id=storage_id,
+            directory_path=directory_path,
+            name=name,
+            file_type="FILE",
+            proxy_sequence_type="HLS_PLAYLIST",
+        )["id"]
+
+    # Audio segments are type "A" as well -- iconik resolves every segment URI,
+    # in any media playlist, against the "A" records. There is no audio type.
+    for name, entries in ((VIDEO_SEQUENCE, VIDEO_ENTRIES), (AUDIO_SEQUENCE, AUDIO_ENTRIES)):
+        files[name] = create_proxy_file(
+            api,
+            asset_id=asset_id,
+            proxy_id=proxy_id,
+            container_id=container_id,
+            storage_id=storage_id,
+            directory_path=directory_path,
+            file_type="SEQUENCE",
+            proxy_sequence_type="A",
+            name=name,
+            # Uploads outside this range are rejected, and the template cannot
+            # be changed later, so it has to cover every segment up front.
+            template=f"{name} [0-{len(entries)}]",
+        )["id"]
+
+    return files
 
 
 def main():
@@ -353,6 +652,13 @@ def main():
         default=30.0,
         help='Seconds to wait between segments, simulating transcode time '
              '(default: 30)',
+    )
+
+    parser.add_argument(
+        '--separate-audio-video',
+        action='store_true',
+        help='Publish separate video and audio renditions (master.m3u8 + '
+             'video.m3u8 + audio.m3u8) instead of one muxed rendition',
     )
 
     parser.add_argument(
@@ -403,34 +709,20 @@ def main():
     directory_path = str(uuid.uuid1())
     logger.info(f"Proxy files directory: {directory_path}")
 
-    playlist_file = create_proxy_file(
-        api,
-        asset_id=asset_id,
-        proxy_id=proxy_id,
-        container_id=container_id,
-        storage_id=storage_id,
-        directory_path=directory_path,
-        name="master.m3u8",
-        file_type="FILE",
-        proxy_sequence_type="HLS_PLAYLIST",
-    )
+    if args.separate_audio_video:
+        files = register_separate_av_files(
+            api, asset_id, proxy_id, container_id, storage_id, directory_path
+        )
+        segment_count = len(VIDEO_ENTRIES)
+        playlists = ["", VIDEO_PLAYLIST, AUDIO_PLAYLIST]
+    else:
+        files = register_muxed_files(
+            api, asset_id, proxy_id, container_id, storage_id, directory_path
+        )
+        segment_count = len(MUXED_ENTRIES)
+        playlists = [""]
 
-    ts_sequence = create_proxy_file(
-        api,
-        asset_id=asset_id,
-        proxy_id=proxy_id,
-        container_id=container_id,
-        storage_id=storage_id,
-        directory_path=directory_path,
-        file_type="SEQUENCE",
-        proxy_sequence_type="A",
-        name="seq_%05d.ts",
-        # The range end is exclusive: "[0-1]" advertises only seq_00000.ts,
-        # which is why the served playlist came back one segment short.
-        template=f"seq_%05d.ts [0-{len(SEGMENTS)}]",
-    )
-
-    for index in range(len(SEGMENTS)):
+    for index in range(segment_count):
         if index:
             logger.warning(
                 f"Sleeping for {args.segment_delay:g} seconds, pretending the "
@@ -438,20 +730,31 @@ def main():
             )
             time.sleep(args.segment_delay)
 
-        publish_segment(
-            api,
-            asset_id=asset_id,
-            ts_sequence_id=ts_sequence["id"],
-            playlist_file_id=playlist_file["id"],
-            storage_method=storage_method,
-            index=index,
-        )
+        if args.separate_audio_video:
+            publish_separate_av_segment(
+                api,
+                asset_id=asset_id,
+                files=files,
+                storage_method=storage_method,
+                index=index,
+            )
+        else:
+            publish_segment(
+                api,
+                asset_id=asset_id,
+                ts_sequence_id=files[MUXED_SEQUENCE],
+                playlist_file_id=files[MASTER_PLAYLIST],
+                storage_method=storage_method,
+                index=index,
+            )
 
-        get_playlist_content(
-            api, asset_id=asset_id, version_id=version_id, proxy_id=proxy_id
-        )
+        for path in playlists:
+            get_playlist_content(
+                api, asset_id=asset_id, version_id=version_id, proxy_id=proxy_id,
+                path=path,
+            )
 
-    # The last playlist published above carries #EXT-X-ENDLIST, so the proxy is
+    # The last playlists published above carry #EXT-X-ENDLIST, so the proxy is
     # complete and can be closed.
     closed = close_proxy(api, asset_id, proxy_id)
     logger.info(f"Closed proxy: id={proxy_id}, status={closed.get('status')}")
