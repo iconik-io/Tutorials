@@ -545,6 +545,64 @@ What to look for:
 | Segments 404 | The playlist record and the sequence record have different `directory_path` values |
 | Player rejects the playlist outright | `#EXTM3U` is not the literal first line, or lines carry leading whitespace |
 
+### Separate audio and video renditions
+
+The steps above publish one rendition whose segments carry muxed audio and video. You can also publish audio and video as **separate renditions**: a master playlist pointing at a video media playlist and an audio media playlist, each with its own segments. iconik serves DRM proxies in this layout.
+
+The proxy and container are created exactly as above. The difference is in which proxy file records you create and which playlists you upload.
+
+**Proxy file records** (all in one container, sharing one `directory_path`):
+
+| `name` | `type` | `proxy_sequence_type` | `template` |
+|---|---|---|---|
+| `master.m3u8` | `FILE` | `HLS_PLAYLIST` | — |
+| `video.m3u8` | `FILE` | `HLS_PLAYLIST` | — |
+| `audio.m3u8` | `FILE` | `HLS_PLAYLIST` | — |
+| `video_%05d.ts` | `SEQUENCE` | `A` | `video_%05d.ts [0-N]` |
+| `audio_%05d.ts` | `SEQUENCE` | `A` | `audio_%05d.ts [0-N]` |
+
+- Audio segments use `proxy_sequence_type: "A"` too. iconik looks up every segment URI in every media playlist among the `A` records, and there is no separate audio type.
+- The upload URL endpoint rejects segment numbers outside the template range, and a template can't be changed after the record is created. Make `N` cover every segment the stream will produce.
+
+**Master playlist.** This is the minimum. Upload it once, after the first media playlists are on storage. It never changes and never carries `#EXT-X-ENDLIST`, because that is a media-playlist tag:
+
+```m3u8
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT=YES,URI="audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=3854826,CODECS="avc1.640029,mp4a.40.2",AUDIO="audio"
+video.m3u8
+```
+
+- `#EXT-X-MEDIA` requires `TYPE`, `GROUP-ID` and `NAME`. `DEFAULT=YES` makes players select the audio without being asked.
+- `#EXT-X-STREAM-INF` requires `BANDWIDTH`. This is the peak segment bit rate *including* the audio rendition. `AUDIO` must match the `GROUP-ID`.
+- `CODECS` is optional in the spec, but players use it to set up the separate audio decoder, so include it.
+- Other attributes you may see on DRM proxies (`AUTOSELECT`, `CHANNELS`, `RESOLUTION`, `FRAME-RATE`, `AVERAGE-BANDWIDTH`, `CLOSED-CAPTIONS`, `#EXT-X-INDEPENDENT-SEGMENTS`) are optional.
+
+**Media playlists.** Use the same EVENT format as the single-rendition case: one playlist per rendition, republished after each segment. Withhold `#EXT-X-ENDLIST` until the last segment, as before. Use each segment's own duration. AAC frames do not line up with video frames, so audio `#EXTINF` values differ from video ones:
+
+```m3u8
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:7
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.506667,
+audio_00000.ts
+```
+
+Per segment, upload the video segment and the audio segment first, then republish `video.m3u8` and `audio.m3u8`. Once both final playlists with `#EXT-X-ENDLIST` are on storage, close the proxy.
+
+**How iconik finds the media playlists.** When serving the master, iconik rewrites each media playlist URI to `.../hls/?path=<uri>`. For a `?path=` request, it turns the name into a sequence pattern by replacing the digits before the extension with a printf pattern, then looks for an `HLS_PLAYLIST` record with that name:
+
+| Playlist name | Pattern iconik looks up | Record you need |
+|---|---|---|
+| `video.m3u8` | `video.m3u8` | `FILE` named `video.m3u8` |
+| `stream_0.m3u8`, `stream_1.m3u8` | `stream_%d.m3u8` | one `SEQUENCE` named `stream_%d.m3u8`, template `stream_%d.m3u8 [0-2]` |
+
+Digit-free names are the simplest choice. If your packager writes numbered playlists like `stream_0.m3u8`, as DRM proxies do, register them as a single `SEQUENCE` record. Separate `FILE` records named `stream_0.m3u8` are never matched, and the request returns `425`. Segment names follow the same rule: letters or underscores, then digits, then the extension (`video_00001.ts` → `video_%05d.ts`).
+
+Verify with `GET .../hls/` for the master, then `GET .../hls/?path=video.m3u8` and `GET .../hls/?path=audio.m3u8` for the media playlists.
+
 ---
 
 ## Storage-Specific Proxy Upload
@@ -618,6 +676,7 @@ A working Python implementation of the complete growing proxy workflow is provid
 - Uploading real HLS segments (`Example Code/data/seq_0000*.ts`) and republishing the playlist after each one
 - Selecting the correct upload flow for the proxy storage backend (GCS resumable, Azure block blob, or plain `PUT`)
 - Finalizing the playlist with `#EXT-X-ENDLIST`, then closing the proxy with a `PATCH` to `CLOSED`
+- With `--separate-audio-video`: publishing [separate audio and video renditions](#separate-audio-and-video-renditions) (`master.m3u8` + `video.m3u8` + `audio.m3u8`) instead of one muxed rendition
 
 **Run it:**
 ```bash
@@ -627,10 +686,11 @@ python "Example Code/growing_proxy.py" \
   --asset-id <ASSET_UUID> \
   [--domain https://your-iconik-instance.iconik.cloud] \
   [--segment-delay 30] \
+  [--separate-audio-video] \
   [-v]
 ```
 
-The two sample segments it publishes live in [`Example Code/data/`](Example%20Code/data). Lower `--segment-delay` to shorten the simulated transcode gap.
+The sample segments it publishes live in [`Example Code/data/`](Example%20Code/data): `seq_0000*.ts` carry muxed audio and video, and `video_0000*.ts` / `audio_0000*.ts` are the same segments split for `--separate-audio-video`. Lower `--segment-delay` to shorten the simulated transcode gap.
 
 For detailed documentation of each function in the script, see [`Example Code/proxy_upload_docs.md`](Example%20Code/proxy_upload_docs.md).
 

@@ -4,6 +4,8 @@
 
 This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload workflow** against the iconik media asset management API. It creates a proxy (a lower-resolution video representation of an asset), uploads real HLS segments and playlist files to storage, and simulates a progressive transcoding update across two phases.
 
+By default the segments carry muxed audio and video. With `--separate-audio-video` the script publishes separate renditions instead: a master playlist pointing at `video.m3u8` and `audio.m3u8`, each with its own segments. See [Separate Audio and Video Renditions](#separate-audio-and-video-renditions).
+
 ---
 
 ## Table of Contents
@@ -15,7 +17,8 @@ This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload wo
 5. [Class: TestAPI](#class-testapi)
 6. [Segment Set and Constants](#segment-set-and-constants)
 7. [Functions](#functions)
-   - [build_playlist](#build_playlist)
+   - [build_media_playlist](#build_media_playlist)
+   - [build_master_playlist](#build_master_playlist)
    - [get_asset_version_id](#get_asset_version_id)
    - [get_proxy_storage](#get_proxy_storage)
    - [create_proxy](#create_proxy)
@@ -23,12 +26,15 @@ This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload wo
    - [create_proxy_file](#create_proxy_file)
    - [get_proxy_file_upload_url](#get_proxy_file_upload_url)
    - [upload_file_data](#upload_file_data)
-   - [publish_segment](#publish_segment)
+   - [upload_proxy_file, upload_segment, upload_playlist](#upload_proxy_file-upload_segment-upload_playlist)
+   - [register_muxed_files / register_separate_av_files](#register_muxed_files--register_separate_av_files)
+   - [publish_segment / publish_separate_av_segment](#publish_segment--publish_separate_av_segment)
    - [close_proxy](#close_proxy)
    - [get_playlist_content](#get_playlist_content)
 8. [main() — Full Execution Flow](#main--full-execution-flow)
 9. [Data Models](#data-models)
 10. [HLS Simulation Explained](#hls-simulation-explained)
+11. [Separate Audio and Video Renditions](#separate-audio-and-video-renditions)
 
 ---
 
@@ -36,7 +42,7 @@ This script simulates a **proxy creation and HLS (HTTP Live Streaming) upload wo
 
 - Python 3.10+
 - [`requests`](https://pypi.org/project/requests/) library
-- The sample segments in `data/` (`seq_00000.ts`, `seq_00001.ts`)
+- The sample segments in `data/`: `seq_00000.ts` and `seq_00001.ts` (muxed), plus `video_0000*.ts` and `audio_0000*.ts` (split, for `--separate-audio-video`)
 
 Install dependencies:
 
@@ -55,6 +61,7 @@ python script.py \
   --asset-id <ASSET_UUID> \
   [--domain https://test.iconik.cloud] \
   [--segment-delay 30] \
+  [--separate-audio-video] \
   [-v]
 ```
 
@@ -71,6 +78,7 @@ Run it from this directory, or from anywhere — segment paths resolve relative 
 | `--app-id` | Yes | — | Application ID (`App-ID` header) |
 | `--asset-id` | Yes | — | UUID of the target asset to attach the proxy to |
 | `--segment-delay` | No | `30` | Seconds to wait between segments, simulating transcode time |
+| `--separate-audio-video` | No | off | Publish separate video and audio renditions instead of one muxed rendition |
 | `-v` / `--verbose` | No | — | Enables `DEBUG`-level logging output |
 
 ---
@@ -120,22 +128,47 @@ Print Playlist State (complete)
 The segments the script publishes are declared once, at module level:
 
 ```python
-SEGMENTS = [
-    ("seq_00000.ts", 6.539867),
-    ("seq_00001.ts", 5.605600),
+SEGMENTS = [               # muxed, in video frames
+    ("seq_00000.ts", 196),
+    ("seq_00001.ts", 168),
+]
+VIDEO_SEGMENTS = [         # video-only, in video frames
+    ("video_00000.ts", 196),
+    ("video_00001.ts", 168),
+]
+AUDIO_SEGMENTS = [         # audio-only, in AAC frames (1024 samples @ 48 kHz)
+    ("audio_00000.ts", 305),
+    ("audio_00001.ts", 263),
 ]
 
-TARGET_DURATION = max(round(duration) for _, duration in SEGMENTS)  # 7
+MUXED_ENTRIES = playlist_entries(SEGMENTS, duration_seconds)        # (name, seconds)
+VIDEO_ENTRIES = playlist_entries(VIDEO_SEGMENTS, duration_seconds)
+AUDIO_ENTRIES = playlist_entries(AUDIO_SEGMENTS, audio_duration_seconds)
+
+TARGET_DURATION = max(round(d) for _, d in MUXED_ENTRIES + VIDEO_ENTRIES + AUDIO_ENTRIES)  # 7
 ```
 
-The durations are the **actual** presentation durations of the sample files, from `ffprobe`:
+The counts give the **actual** presentation durations of the sample files, from `ffprobe`:
 
 | Segment | Frames | Frame rate | Duration |
 |---|---|---|---|
 | `seq_00000.ts` | 196 | 30000/1001 | 6.539867s |
 | `seq_00001.ts` | 168 | 30000/1001 | 5.605600s |
+| `video_00000.ts` | 196 | 30000/1001 | 6.539867s |
+| `video_00001.ts` | 168 | 30000/1001 | 5.605600s |
+| `audio_00000.ts` | 305 AAC | 48000/1024 | 6.506667s |
+| `audio_00001.ts` | 263 AAC | 48000/1024 | 5.610667s |
 
-Use measured durations, not the nominal segment length configured on the transcoder — segments land on keyframe boundaries and drift from the target. Adding a segment to this list is all that is needed to extend the simulation; the playlist, the target duration and the sequence `template` range are all derived from it.
+The `video_`/`audio_` files are the muxed segments split with stream copy and `-copyts`, so their timestamps, and therefore A/V sync, are unchanged:
+
+```bash
+ffmpeg -copyts -i seq_00000.ts -map 0:v -c copy -muxdelay 0 video_00000.ts
+ffmpeg -copyts -i seq_00000.ts -map 0:a -c copy -muxdelay 0 audio_00000.ts
+```
+
+Audio segment durations differ from the video ones because AAC frames (1024 samples) don't line up with video frames. Each media playlist uses its own segments' durations.
+
+Use measured durations, not the nominal segment length configured on the transcoder — segments land on keyframe boundaries and drift from the target. Adding a segment to these lists is all that is needed to extend the simulation; the playlists, the target duration and the sequence `template` ranges are all derived from them. All three lists must have the same length.
 
 `TARGET_DURATION` is computed across **all** segments, including ones not published yet, because an `EVENT` playlist may only be appended to — the value written in the first playlist has to hold for the whole stream. A real transcoder should use its configured maximum segment length.
 
@@ -176,17 +209,17 @@ Raises `requests.HTTPError` on any non-2xx response.
 
 ## Functions
 
-### `build_playlist`
+### `build_media_playlist`
 
 ```python
-def build_playlist(segment_count: int, complete: bool) -> str
+def build_media_playlist(entries: list[tuple[str, float]], complete: bool) -> str
 ```
 
-Renders the master playlist covering the first `segment_count` entries of `SEGMENTS`.
+Renders a media playlist listing `entries`, given as `(filename, seconds)` pairs. It is used for the muxed `master.m3u8` and for `video.m3u8` / `audio.m3u8` in separate mode.
 
 | Parameter | Description |
 |---|---|
-| `segment_count` | How many segments are on storage and safe to advertise |
+| `entries` | The segments that are on storage and safe to advertise, e.g. `VIDEO_ENTRIES[:index + 1]` |
 | `complete` | When `True`, appends `#EXT-X-ENDLIST` |
 
 Three properties of the output matter for growing playback:
@@ -194,6 +227,27 @@ Three properties of the output matter for growing playback:
 - `#EXTM3U` is the literal first line, with no leading whitespace on any line. An indented playlist is not a valid playlist.
 - Each `#EXTINF` is immediately followed by its segment URI. An `#EXTINF` with no URI after it declares nothing, and the segment is never fetched.
 - The type is `EVENT` and `#EXT-X-ENDLIST` is withheld until the final segment, which is what keeps the player reloading. `VOD` would be wrong: a VOD playlist is defined as never changing, so a player reads it once and stops at whatever it saw first.
+
+---
+
+### `build_master_playlist`
+
+```python
+def build_master_playlist() -> str
+```
+
+Renders the master playlist for `--separate-audio-video`. It contains the minimum needed to tie the video rendition to a separate audio rendition:
+
+```m3u8
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT=YES,URI="audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=3854826,CODECS="avc1.640029,mp4a.40.2",AUDIO="audio"
+video.m3u8
+```
+
+- `BANDWIDTH` comes from `peak_bandwidth()`: the largest video and audio segment pair, in bits per second.
+- `CODECS` is the `CODECS` constant: H.264 High@4.1 read from the sample's SPS, plus AAC-LC.
+- The master doesn't change while the proxy grows, so it is uploaded once. It never carries `#EXT-X-ENDLIST`.
 
 ---
 
@@ -410,20 +464,54 @@ Content-Type is `application/octet-stream` in all cases.
 
 ---
 
-### `publish_segment`
+### `upload_proxy_file`, `upload_segment`, `upload_playlist`
 
 ```python
-def publish_segment(
-    api: TestAPI,
-    asset_id: str,
-    ts_sequence_id: str,
-    playlist_file_id: str,
-    storage_method: str,
-    index: int,
-) -> None
+def upload_proxy_file(api, asset_id, file_id, data: bytes, storage_method, path="") -> None
+def upload_segment(api, asset_id, sequence_id, storage_method, name, duration) -> None
+def upload_playlist(api, asset_id, playlist_file_id, storage_method, name, entries, complete) -> None
 ```
 
-Publishes one segment: reads `SEGMENTS[index]` from `data/`, uploads it to its pre-signed URL, and only then republishes `master.m3u8` including it. The ordering is deliberate — advertising a segment before it is on storage gives the player a 404 and stalls playback. When `index` is the last entry, the republished playlist carries `#EXT-X-ENDLIST`.
+Small wrappers around [`get_proxy_file_upload_url`](#get_proxy_file_upload_url) and [`upload_file_data`](#upload_file_data):
+
+- `upload_proxy_file` fetches a pre-signed URL for a proxy file record and uploads `data` to it. Pass `path` for a member of a `SEQUENCE` record; leave it empty for a `FILE` record.
+- `upload_segment` reads `data/<name>` and uploads it into a `SEQUENCE` record.
+- `upload_playlist` renders `entries` with [`build_media_playlist`](#build_media_playlist) and overwrites the playlist record.
+
+---
+
+### `register_muxed_files` / `register_separate_av_files`
+
+```python
+def register_muxed_files(api, asset_id, proxy_id, container_id, storage_id, directory_path) -> dict[str, str]
+def register_separate_av_files(api, asset_id, proxy_id, container_id, storage_id, directory_path) -> dict[str, str]
+```
+
+Each creates the proxy file records for one layout via [`create_proxy_file`](#create_proxy_file) and returns a map from record name to proxy file id.
+
+| Layout | Records |
+|---|---|
+| Muxed (default) | `master.m3u8` (FILE, HLS_PLAYLIST), `seq_%05d.ts` (SEQUENCE, A) |
+| Separate | `master.m3u8`, `video.m3u8`, `audio.m3u8` (FILE, HLS_PLAYLIST), `video_%05d.ts`, `audio_%05d.ts` (SEQUENCE, A) |
+
+---
+
+### `publish_segment` / `publish_separate_av_segment`
+
+```python
+def publish_segment(api, asset_id, ts_sequence_id, playlist_file_id, storage_method, index) -> None
+def publish_separate_av_segment(api, asset_id, files: dict[str, str], storage_method, index) -> None
+```
+
+`publish_segment` publishes one muxed segment. It uploads `seq_<index>.ts` and only then republishes `master.m3u8` including it. The ordering is deliberate: advertising a segment before it is on storage gives the player a 404 and stalls playback.
+
+`publish_separate_av_segment` applies the same rule to two renditions:
+
+1. Upload `video_<index>.ts` and `audio_<index>.ts`.
+2. Republish `video.m3u8` and `audio.m3u8`.
+3. On the first call only, upload the master playlist. It is published after the media playlists it points at exist.
+
+When `index` is the last entry, the republished playlists carry `#EXT-X-ENDLIST`.
 
 ---
 
@@ -457,6 +545,7 @@ def get_playlist_content(
     asset_id: str,
     version_id: str,
     proxy_id: str,
+    path: str = "",
 ) -> None
 ```
 
@@ -464,6 +553,7 @@ Fetches and prints the current `.m3u8` HLS playlist as served by the iconik API.
 
 - **Method:** `GET`
 - **Endpoint:** `/API/files/v1/assets/{asset_id}/versions/{version_id}/proxies/{proxy_id}/hls/`
+- **Query param:** `path`. Omit it for the master playlist; pass a media playlist name (`video.m3u8`, `audio.m3u8`) to fetch that playlist. This is the same URL iconik writes into the master it serves.
 - **Returns:** Raw playlist text (printed to stdout).
 
 ---
@@ -478,14 +568,14 @@ Fetches and prints the current `.m3u8` HLS playlist as served by the iconik API.
 6. Call `create_proxy` → extract `proxy_id`.
 7. Call `create_proxy_container` with `segment_duration=TARGET_DURATION` → extract `container_id`.
 8. Generate one `directory_path` (`uuid.uuid1()`) shared by every file in the container.
-9. Call `create_proxy_file` twice, passing that same `directory_path` to both:
-   - Once for the **master playlist** (`file_type="FILE"`, `proxy_sequence_type="HLS_PLAYLIST"`, `name="master.m3u8"`)
-   - Once for the **TS segment sequence** (`file_type="SEQUENCE"`, `proxy_sequence_type="A"`, `name="seq_%05d.ts"`, `template="seq_%05d.ts [0-1]"`)
-10. For each entry in `SEGMENTS`, call `publish_segment`, which:
+9. Create the proxy file records, all with that same `directory_path`:
+   - default: `register_muxed_files`, which creates the **master playlist** (`FILE`, `HLS_PLAYLIST`, `master.m3u8`) and the **TS segment sequence** (`SEQUENCE`, `A`, `seq_%05d.ts`, `template="seq_%05d.ts [0-2]"`)
+   - `--separate-audio-video`: `register_separate_av_files`. See [Separate Audio and Video Renditions](#separate-audio-and-video-renditions).
+10. For each segment, call `publish_segment` (or `publish_separate_av_segment` in separate mode), which:
    - uploads the `.ts` file from `data/` to its pre-signed URL, **then**
    - republishes `master.m3u8` including that segment — never the other way round, since a player must not be told about a segment it cannot fetch yet.
    The last segment's playlist is the one that carries `#EXT-X-ENDLIST`.
-11. Print the playlist state via `get_playlist_content` after each publish.
+11. Print the playlist state via `get_playlist_content` after each publish. In separate mode, the master, `video.m3u8` and `audio.m3u8` are all printed.
 12. Between segments, sleep `--segment-delay` seconds to simulate active transcoding.
 13. Once the loop finishes — so the playlist with `#EXT-X-ENDLIST` is on storage — call `close_proxy` to move the proxy from `GROWING` to `CLOSED`.
 
@@ -607,3 +697,55 @@ seq_00001.ts
 ```
 
 The presence of `#EXT-X-ENDLIST` signals that all segments have been written and the asset is fully available, and the player stops reloading. The proxy record is then closed separately via `close_proxy`. This mirrors the behaviour of a real transcoder progressively writing segments during encoding.
+
+---
+
+## Separate Audio and Video Renditions
+
+With `--separate-audio-video` the proxy is published in the layout iconik uses for DRM proxies, without the DRM. Video and audio are separate renditions, each with its own media playlist and segments, tied together by a master playlist.
+
+```
+master.m3u8 ──► #EXT-X-MEDIA TYPE=AUDIO ──► audio.m3u8 ──► audio_00000.ts, audio_00001.ts
+            └─► #EXT-X-STREAM-INF ────────► video.m3u8 ──► video_00000.ts, video_00001.ts
+```
+
+Proxy file records, all under one `directory_path`:
+
+| `name` | `type` | `proxy_sequence_type` | `template` |
+|---|---|---|---|
+| `master.m3u8` | `FILE` | `HLS_PLAYLIST` | — |
+| `video.m3u8` | `FILE` | `HLS_PLAYLIST` | — |
+| `audio.m3u8` | `FILE` | `HLS_PLAYLIST` | — |
+| `video_%05d.ts` | `SEQUENCE` | `A` | `video_%05d.ts [0-2]` |
+| `audio_%05d.ts` | `SEQUENCE` | `A` | `audio_%05d.ts [0-2]` |
+
+Things that are easy to get wrong:
+
+- **Audio segments are type `A` too.** iconik looks up every segment URI, in any media playlist, among the `A` records.
+- **Media playlist names.** iconik serves `hls/?path=<name>` by turning `<name>` into a sequence pattern (digits before the extension become `%d` / `%05d`) and looking for an `HLS_PLAYLIST` record with that name. `video.m3u8` has no digits, so a `FILE` record named `video.m3u8` works. `stream_0.m3u8` would become `stream_%d.m3u8`, and so would need a single `SEQUENCE` record named `stream_%d.m3u8`. A `FILE` record named `stream_0.m3u8` is never matched and the request returns `425`.
+- **Ordering.** Upload both segments, then both media playlists. Publish the master only once the media playlists it points at exist.
+- **Durations.** Audio `#EXTINF` values come from the audio segments, not the video ones.
+
+Served playlists after the second segment:
+
+```m3u8
+# hls/  (abridged; iconik rewrites the URIs and may reorder attributes)
+#EXTM3U
+#EXT-X-MEDIA:URI="/API/files/v1/assets/.../hls/?path=audio.m3u8",TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT=YES
+#EXT-X-STREAM-INF:BANDWIDTH=3854826,CODECS="avc1.640029,mp4a.40.2",AUDIO="audio"
+/API/files/v1/assets/.../hls/?path=video.m3u8
+```
+
+```m3u8
+# as uploaded: audio.m3u8
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:7
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:6.506667,
+audio_00000.ts
+#EXTINF:5.610667,
+audio_00001.ts
+#EXT-X-ENDLIST
+```
